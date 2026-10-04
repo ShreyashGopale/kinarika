@@ -1,13 +1,18 @@
+```javascript
 import axios from 'axios';
 
-// Single axios instance – every component imports this
+// Backend API URL
+const API_URL = import.meta.env.DEV
+  ? `http://${window.location.hostname}:8000/api/`
+  : `${import.meta.env.VITE_API_URL}/api/`;
+
+// Single axios instance used throughout the application
 const api = axios.create({
-  baseURL: import.meta.env.DEV
-    ? `http://${window.location.hostname}:8000/api/`
-    : (import.meta.env.VITE_API_URL || 'https://kinarika.vercel.app/api/'),
-  withCredentials: true,            // send session cookie
-  xsrfCookieName: 'csrftoken',     // Django CSRF cookie name
-  xsrfHeaderName: 'X-CSRFToken',   // Django CSRF header name
+  baseURL: API_URL,
+  withCredentials: true,
+  xsrfCookieName: 'csrftoken',
+  xsrfHeaderName: 'X-CSRFToken',
 });
 
 export default api;
+```
