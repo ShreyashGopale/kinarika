@@ -81,15 +81,15 @@ import os
 # Use Supabase PostgreSQL on Vercel or when POSTGRES_DB is set; SQLite locally
 if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
     DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'postgres',
-        'USER': 'postgres',
-        'PASSWORD': 'OmkarWalunj@12345', 
-        'HOST': 'db.lrujygyuchccliabhfxg.supabase.co',
-        'PORT': '5432',
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'postgres'),
+            'USER': os.environ.get('POSTGRES_USER', 'postgres.lrujygyuchccliabhfxg'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'OmkarWalunj@12345'), 
+            'HOST': os.environ.get('POSTGRES_HOST', 'aws-0-ap-south-1.pooler.supabase.com'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        }
     }
-}
 
 else:
     DATABASES = {
@@ -182,12 +182,23 @@ CORS_ALLOW_ALL_ORIGINS = True
 # Trust the frontend domain for CSRF
 CSRF_TRUSTED_ORIGINS = [
     'https://kinarika-lac.vercel.app',
+    'https://kinarika-r0cej6pru-shreyash-gopale-personal.vercel.app',
     'https://kinarika.vercel.app',
+    'https://kinarika-backend-g3bio3uhd-shreyash-gopale-personal.vercel.app',
     'http://localhost:5173',
+    'http://localhost:8000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:8000',
 ]
 
-# Cross-domain session cookie settings (frontend and backend on different Vercel domains)
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True
+# Cross-domain session cookie settings
+if os.environ.get('VERCEL'):
+    SESSION_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SAMESITE = 'None'
+    CSRF_COOKIE_SECURE = True
+else:
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SECURE = False

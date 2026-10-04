@@ -92,11 +92,14 @@ export default function App() {
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
-      await api.post('auth/login/', { username: loginUser, password: loginPass });
+      await api.post('auth/login/', { username: (loginUser || '').trim(), password: (loginPass || '').trim() });
       setLoggedIn(true);
       loadAll();
       showToast('Welcome back!');
-    } catch { alert('Invalid credentials'); }
+    } catch (err) {
+      const msg = err.response?.data?.error || (err.response ? 'Invalid credentials' : 'Cannot connect to backend server. Please verify backend is running.');
+      alert(msg);
+    }
   };
 
   const handleLogout = async () => {

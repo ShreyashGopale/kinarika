@@ -26,15 +26,20 @@ from .serializers import (
 @permission_classes([AllowAny])
 def api_login(request):
     """Hardcoded username/password login."""
-    username = request.data.get('username')
-    password = request.data.get('password')
+    username = (request.data.get('username') or '').strip()
+    password = (request.data.get('password') or '').strip()
     
     if username == "kinarika" and password == "weservehealthy":
-        # Create the user if it doesn't exist so session auth works
-        user, _ = User.objects.get_or_create(username="kinarika")
-        user.backend = 'django.contrib.auth.backends.ModelBackend'
-        login(request, user)
-        return Response({'message': 'Logged in', 'user': user.username})
+        try:
+            user, created = User.objects.get_or_create(username="kinarika")
+            if created or not user.has_usable_password():
+                user.set_password("weservehealthy")
+                user.save()
+            user.backend = 'django.contrib.auth.backends.ModelBackend'
+            login(request, user)
+            return Response({'message': 'Logged in', 'user': user.username})
+        except Exception as e:
+            return Response({'error': f'Database error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
     # Fallback to standard auth just in case
     user = authenticate(request, username=username, password=password)
