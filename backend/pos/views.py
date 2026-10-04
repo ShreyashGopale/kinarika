@@ -32,6 +32,7 @@ def api_login(request):
     if username == "kinarika" and password == "weservehealthy":
         # Create the user if it doesn't exist so session auth works
         user, _ = User.objects.get_or_create(username="kinarika")
+        user.backend = 'django.contrib.auth.backends.ModelBackend'
         login(request, user)
         return Response({'message': 'Logged in', 'user': user.username})
         

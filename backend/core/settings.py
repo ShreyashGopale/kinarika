@@ -78,8 +78,8 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 import os
-# Default to SQLite for local development unless POSTGRES_DB is defined
-if os.environ.get('POSTGRES_DB'):
+# Use Supabase PostgreSQL on Vercel or when POSTGRES_DB is set; SQLite locally
+if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
     DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
