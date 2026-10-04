@@ -25,13 +25,22 @@ from .serializers import (
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def api_login(request):
-    """Simple username/password login."""
+    """Hardcoded username/password login."""
     username = request.data.get('username')
     password = request.data.get('password')
+    
+    if username == "kinarika" and password == "weservehealthy":
+        # Create the user if it doesn't exist so session auth works
+        user, _ = User.objects.get_or_create(username="kinarika")
+        login(request, user)
+        return Response({'message': 'Logged in', 'user': user.username})
+        
+    # Fallback to standard auth just in case
     user = authenticate(request, username=username, password=password)
     if user is not None:
         login(request, user)
         return Response({'message': 'Logged in', 'user': user.username})
+        
     return Response(
         {'error': 'Invalid credentials'},
         status=status.HTTP_401_UNAUTHORIZED

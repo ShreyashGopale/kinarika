@@ -17,8 +17,8 @@ import Dashboard from './Dashboard';
 export default function App() {
   // --- auth state ---
   const [loggedIn, setLoggedIn] = useState(false);
-  const [loginUser, setLoginUser] = useState('');
-  const [loginPass, setLoginPass] = useState('');
+  const [loginUser, setLoginUser] = useState('kinarika');
+  const [loginPass, setLoginPass] = useState('weservehealthy');
 
   // --- navigation ---
   const [tab, setTab] = useState('tables');
