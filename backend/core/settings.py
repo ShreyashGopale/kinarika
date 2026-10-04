@@ -24,9 +24,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-c9ln&&^bglcwfk=y_z4$rt#vo(upqg1(#strx)dk&+8!b_$d85')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = 'False'
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -81,15 +81,16 @@ import os
 # Default to SQLite for local development unless POSTGRES_DB is defined
 if os.environ.get('POSTGRES_DB'):
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('POSTGRES_DB', 'kinarika_db'),
-            'USER': os.environ.get('POSTGRES_USER', 'kinarika_user'),
-            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-            'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
-            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
-        }
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'postgres',
+        'USER': 'postgres',
+        'PASSWORD': 'OmkarWalunj@12345', 
+        'HOST': 'db.lrujygyuchccliabhfxg.supabase.co',
+        'PORT': '5432',
     }
+}
+
 else:
     DATABASES = {
         'default': {
@@ -173,3 +174,8 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = 'pos.User'
+
+
+# Allow cross-device data transmission
+CORS_ALLOW_ALL_ORIGINS = True
+
