@@ -179,3 +179,15 @@ AUTH_USER_MODEL = 'pos.User'
 # Allow cross-device data transmission
 CORS_ALLOW_ALL_ORIGINS = True
 
+# Trust the frontend domain for CSRF
+CSRF_TRUSTED_ORIGINS = [
+    'https://kinarika-lac.vercel.app',
+    'https://kinarika.vercel.app',
+    'http://localhost:5173',
+]
+
+# Cross-domain session cookie settings (frontend and backend on different Vercel domains)
+SESSION_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SECURE = True
