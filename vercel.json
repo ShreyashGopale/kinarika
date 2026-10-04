@@ -1,6 +1,5 @@
 {
     "version": 2,
-    "buildCommand": "chmod +x build_files.sh && ./build_files.sh",
     "builds": [
         {
             "src": "backend/core/wsgi.py",
