@@ -87,6 +87,34 @@ export default function App() {
     api.get('auth/session/').then(() => { setLoggedIn(true); loadAll(); }).catch(() => {});
   }, []);
 
+  // ── Browser history / back-button handling ────────────────
+  // Push an initial history entry so pressing back doesn't immediately
+  // close the browser tab. Navigating back from the first entry shows
+  // a toast prompting the user to press again to leave.
+  useEffect(() => {
+    // Push current state into history so we have at least one entry
+    window.history.pushState({ tab: 'tables' }, '', window.location.href);
+    let exitConfirm = false;
+
+    const handlePopState = (e) => {
+      if (exitConfirm) {
+        // User pressed back again — allow the navigation (close/leave)
+        window.removeEventListener('popstate', handlePopState);
+        window.history.pushState({ tab: 'tables' }, '', window.location.href);
+        window.addEventListener('popstate', handlePopState);
+      } else {
+        // First back press — go to Tables tab and stay
+        setTab('tables');
+        exitConfirm = true;
+        window.history.pushState({ tab: 'tables' }, '', window.location.href);
+        showToast('Press back again to exit');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [showToast]);
+
 
 
   const handleLogin = async (e) => {
@@ -518,7 +546,7 @@ export default function App() {
 
     return (
       <div className="page">
-        <div className="page__header">
+        <div className="page__scroll">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-sm">
               <button className="btn btn--icon" onClick={() => setTab('tables')}><ArrowLeft size={16}/></button>
@@ -527,7 +555,7 @@ export default function App() {
             <span className="text-xs text-muted fw-700">{activeCount}/{allMenuItems.length} active</span>
             <button className="btn btn--primary btn--sm" onClick={() => setAddItemModal(true)}><Plus size={14}/> Add Dish</button>
           </div>
-          
+
           <div className="flex items-center justify-between mb-1">
             <button
               onClick={() => setSetMenuVegOnly(!setMenuVegOnly)}
@@ -549,8 +577,7 @@ export default function App() {
               ))}
             </div>
           )}
-        </div>
-        <div className="page__scroll">
+
           {Object.keys(grouped).length === 0 ? (
             <div className="empty-state"><p>No items found</p></div>
           ) : (
@@ -692,7 +719,7 @@ export default function App() {
   // ── 2. MENU PAGE (used for both table & token ordering) ─
   const MenuPage = () => (
     <div className="page">
-      <div className="page__header">
+      <div className="page__scroll">
         {/* Context banner */}
         {orderContext && (
           <div className="flex items-center justify-between mb-1" style={{ background: 'var(--primary-light)', padding: '.45rem .75rem', borderRadius: 'var(--r-xl)', marginBottom: '.75rem' }}>
@@ -731,9 +758,7 @@ export default function App() {
             ))}
           </div>
         )}
-      </div>
 
-      <div className="page__scroll">
         <div className="flex-col gap-md">
           {shownItems.length === 0 ? (
             <div className="empty-state"><p>No items found</p></div>
