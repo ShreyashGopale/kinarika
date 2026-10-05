@@ -47,6 +47,8 @@ import {
   PointElement,
   LineElement,
   BarElement,
+  BarController,
+  LineController,
   Title,
   Tooltip,
   Legend,
@@ -56,7 +58,18 @@ import Flatpickr from 'react-flatpickr';
 import 'flatpickr/dist/themes/light.css';
 import api from './api';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  BarController,   // explicitly register controllers (needed in production builds)
+  LineController,
+  Title,
+  Tooltip,
+  Legend
+);
 
 const fmt = (val) =>
   '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(val || 0);
