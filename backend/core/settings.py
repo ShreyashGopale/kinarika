@@ -177,14 +177,25 @@ AUTH_USER_MODEL = 'pos.User'
 
 
 # Allow cross-device data transmission
-CORS_ALLOW_ALL_ORIGINS = True
+# NOTE: CORS_ALLOW_ALL_ORIGINS cannot be True when CORS_ALLOW_CREDENTIALS is True
+# (the ACAO header cannot be '*' with credentials). List explicit origins instead.
+CORS_ALLOWED_ORIGINS = [
+    'https://kinarika-lac.vercel.app',
+    'https://kinarika-jmkesh445-shreyash-gopale-personal.vercel.app',
+    'https://kinarika.vercel.app',
+    'https://kinarika-backend-cqsjcedp3-shreyash-gopale-personal.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:8000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:8000',
+]
 
 # Trust the frontend domain for CSRF
 CSRF_TRUSTED_ORIGINS = [
     'https://kinarika-lac.vercel.app',
-    'https://kinarika-r0cej6pru-shreyash-gopale-personal.vercel.app',
+    'https://kinarika-jmkesh445-shreyash-gopale-personal.vercel.app',
     'https://kinarika.vercel.app',
-    'https://kinarika-backend-g3bio3uhd-shreyash-gopale-personal.vercel.app',
+    'https://kinarika-backend-cqsjcedp3-shreyash-gopale-personal.vercel.app',
     'http://localhost:5173',
     'http://localhost:8000',
     'http://127.0.0.1:5173',

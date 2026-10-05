@@ -1,9 +1,45 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Component, useState, useEffect, useMemo } from 'react';
 import {
   TrendingUp, IndianRupee, Smartphone, Wallet,
   Receipt, Plus, ArrowUpRight, ArrowDownRight,
   Calendar, Package, X, List, RefreshCw
 } from 'lucide-react';
+
+
+// Error Boundary – prevents a blank screen if a child component throws during render
+// (e.g. Chart.js / flatpickr init failing in a production build)
+class DashboardErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ height: '100%', overflowY: 'auto', background: '#f8fafc', fontFamily: "'Inter', system-ui, sans-serif" }}>
+          <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem 1rem', textAlign: 'center' }}>
+            <h2 style={{ color: '#ef4444', marginBottom: '.5rem' }}>Something went wrong</h2>
+            <p style={{ color: '#64748b', fontSize: '.85rem', marginBottom: '1rem' }}>
+              The dashboard failed to load. Please refresh the page or try again later.
+            </p>
+            <pre style={{
+              background: '#1e293b', color: '#ef4444', padding: '.75rem', borderRadius: '8px',
+              fontSize: '.7rem', maxWidth: '100%', overflowX: 'auto', textAlign: 'left'
+            }}>{this.state.error?.message || String(this.state.error)}</pre>
+            <button
+              style={{ marginTop: '1rem', padding: '.6rem 1.2rem', background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '.85rem' }}
+              onClick={() => window.location.reload()}
+            >Reload Page</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -54,7 +90,7 @@ const C = {
 
 const r = { sm: '6px', md: '10px', lg: '12px', xl: '16px', '2xl': '20px', '3xl': '24px', full: '9999px' };
 
-export default function Dashboard({ dashStats, expenses, addExpense, newExpense, setNewExpense, refreshDashboard }) {
+function Dashboard({ dashStats, expenses, addExpense, newExpense, setNewExpense, refreshDashboard }) {
   const [reportStart, setReportStart] = useState(new Date(Date.now() - 13 * 86400000));
   const [reportEnd, setReportEnd] = useState(new Date());
   const [expStart, setExpStart] = useState(new Date(Date.now() - 6 * 86400000));
@@ -439,5 +475,13 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
         </div>
       )}
     </div>
+  );
+}
+
+export default function DashboardWithBoundary(props) {
+  return (
+    <DashboardErrorBoundary>
+      <Dashboard {...props} />
+    </DashboardErrorBoundary>
   );
 }
