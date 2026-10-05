@@ -67,7 +67,19 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
     const start = reportStart.toISOString().split('T')[0];
     const end = reportEnd.toISOString().split('T')[0];
     api.get(`dashboard/?start_date=${start}&end_date=${end}`)
-      .then(r => setPeriodData(r.data.period))
+      .then(r => {
+        if (r.data?.period) {
+          setPeriodData({
+            chart_data: Array.isArray(r.data.period.chart_data) ? r.data.period.chart_data : [],
+            items_data: Array.isArray(r.data.period.items_data) ? r.data.period.items_data : [],
+            summary: {
+              total_sales: r.data.period.summary?.total_sales || 0,
+              total_profit: r.data.period.summary?.total_profit || 0,
+              total_expenses: r.data.period.summary?.total_expenses || 0,
+            }
+          });
+        }
+      })
       .catch(console.error);
   }, [reportStart, reportEnd]);
 
@@ -81,14 +93,17 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
     refreshDashboard();
   };
 
-  const chartData = useMemo(() => ({
-    labels: periodData.chart_data.map(d => d.date),
-    datasets: [
-      { type: 'line', label: 'Sales', data: periodData.chart_data.map(d => d.sales), borderColor: C.primary, backgroundColor: 'rgba(99,102,241,.08)', borderWidth: 2.5, fill: true, tension: 0.4, pointRadius: 0 },
-      { type: 'bar',  label: 'Profit', data: periodData.chart_data.map(d => d.profit), backgroundColor: C.green, borderRadius: 4, barThickness: 10 },
-      { type: 'line', label: 'Expenses', data: periodData.chart_data.map(d => d.expenses), borderColor: C.rose, borderWidth: 2.5, fill: false, tension: 0.4, pointRadius: 0 },
-    ]
-  }), [periodData]);
+  const chartData = useMemo(() => {
+    const list = Array.isArray(periodData?.chart_data) ? periodData.chart_data : [];
+    return {
+      labels: list.map(d => d?.date || ''),
+      datasets: [
+        { type: 'line', label: 'Sales', data: list.map(d => d?.sales || 0), borderColor: C.primary, backgroundColor: 'rgba(99,102,241,.08)', borderWidth: 2.5, fill: true, tension: 0.4, pointRadius: 0 },
+        { type: 'bar',  label: 'Profit', data: list.map(d => d?.profit || 0), backgroundColor: C.green, borderRadius: 4, barThickness: 10 },
+        { type: 'line', label: 'Expenses', data: list.map(d => d?.expenses || 0), borderColor: C.rose, borderWidth: 2.5, fill: false, tension: 0.4, pointRadius: 0 },
+      ]
+    };
+  }, [periodData]);
 
   const chartOpts = {
     responsive: true, maintainAspectRatio: false,
@@ -103,7 +118,8 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
     }
   };
 
-  const filteredExp = expenses.filter(e => {
+  const filteredExp = (Array.isArray(expenses) ? expenses : []).filter(e => {
+    if (!e?.timestamp) return false;
     const d = new Date(e.timestamp).getTime();
     return d >= new Date(expStart).setHours(0,0,0,0) && d <= new Date(expEnd).setHours(23,59,59,999);
   });
@@ -271,15 +287,15 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
           <div style={{ ...S.sumCards, marginBottom: '1rem' }}>
             <div style={S.sumCard(C.indigoLight, C.indigoBorder)}>
               <p style={S.sumLabel(C.indigo)}>Sales</p>
-              <p style={S.sumAmt(C.indigo)}>{fmt(periodData.summary.total_sales)}</p>
+              <p style={S.sumAmt(C.indigo)}>{fmt(periodData?.summary?.total_sales || 0)}</p>
             </div>
             <div style={S.sumCard(C.greenLight, C.greenBorder)}>
               <p style={S.sumLabel(C.green)}>Profit</p>
-              <p style={S.sumAmt(C.green)}>{fmt(periodData.summary.total_profit)}</p>
+              <p style={S.sumAmt(C.green)}>{fmt(periodData?.summary?.total_profit || 0)}</p>
             </div>
             <div style={S.sumCard(C.roseLight, C.roseBorder)}>
               <p style={S.sumLabel(C.rose)}>Expenses</p>
-              <p style={S.sumAmt(C.rose)}>{fmt(periodData.summary.total_expenses)}</p>
+              <p style={S.sumAmt(C.rose)}>{fmt(periodData?.summary?.total_expenses || 0)}</p>
             </div>
           </div>
 
@@ -314,9 +330,9 @@ export default function Dashboard({ dashStats, expenses, addExpense, newExpense,
                 </tr>
               </thead>
               <tbody>
-                {periodData.items_data.length === 0 ? (
+                {(!periodData?.items_data || periodData.items_data.length === 0) ? (
                   <tr><td colSpan="4" style={{ ...S.td, textAlign: 'center', color: C.muted, padding: '1.5rem' }}>No sales data for this period.</td></tr>
-                ) : periodData.items_data.map((item, i) => {
+                ) : (periodData?.items_data || []).map((item, i) => {
                   const rc = rankColors[i] || { bg: C.bg, color: C.muted };
                   return (
                     <tr key={i}>

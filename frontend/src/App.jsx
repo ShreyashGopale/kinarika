@@ -111,7 +111,7 @@ export default function App() {
   // ── Data loading ──────────────────────────────────────────
   const loadAll = async () => {
     try {
-      const [catR, itemR, tableR, orderR, dashR, expR] = await Promise.all([
+      const results = await Promise.allSettled([
         api.get('menu/categories/'),
         api.get('menu/items/'),
         api.get('tables/'),
@@ -119,13 +119,16 @@ export default function App() {
         api.get('dashboard/'),
         api.get('inventory/'),
       ]);
-      setCategories(catR.data);
-      setMenuItems(itemR.data);
-      setTables(tableR.data);
-      setActiveOrders(orderR.data);
-      setDashStats(dashR.data);
-      setExpenses(expR.data);
-      if (catR.data.length > 0 && !activeCat) setActiveCat(catR.data[0].name);
+      const [catR, itemR, tableR, orderR, dashR, expR] = results;
+      if (catR.status === 'fulfilled' && catR.value?.data) {
+        setCategories(catR.value.data);
+        if (catR.value.data.length > 0 && !activeCat) setActiveCat(catR.value.data[0].name);
+      }
+      if (itemR.status === 'fulfilled' && itemR.value?.data) setMenuItems(itemR.value.data);
+      if (tableR.status === 'fulfilled' && tableR.value?.data) setTables(tableR.value.data);
+      if (orderR.status === 'fulfilled' && orderR.value?.data) setActiveOrders(orderR.value.data);
+      if (dashR.status === 'fulfilled' && dashR.value?.data) setDashStats(dashR.value.data);
+      if (expR.status === 'fulfilled' && expR.value?.data) setExpenses(expR.value.data);
     } catch (err) { console.error(err); }
   };
 
