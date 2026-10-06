@@ -2,7 +2,7 @@ import React, { Component, useState, useEffect, Suspense, lazy } from 'react';
 import {
   IndianRupee, Smartphone, Wallet,
   Receipt, Plus, ArrowUpRight, ArrowDownRight,
-  X, List, RefreshCw
+  X, List, RefreshCw, Calendar
 } from 'lucide-react';
 import api from './api';
 
@@ -45,10 +45,14 @@ class DashboardErrorBoundary extends Component {
 // when the Dashboard tab is actually opened, keeping the initial bundle small
 const LazyChartArea = lazy(() =>
   import('./ChartArea').catch(() => {
-    // Fallback if ChunkArea fails to load dynamically
+    // Fallback if ChartArea fails to load dynamically
     return { default: () => null };
   })
 );
+
+// Lazy-load Flatpickr (~40KB) for the expense-log date filter,
+// so it only downloads when the log modal is opened
+const LazyDatePicker = lazy(() => import('./DateRangePicker'));
 
 const fmt = (val) =>
   '₹' + new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(val || 0);
@@ -330,14 +334,16 @@ function Dashboard({ dashStats, expenses, addExpense, newExpense, setNewExpense,
                 <p style={{ ...S.modalSub, marginBottom: 0 }}>All recorded outgoings</p>
               </div>
             </div>
-            {/* date filter */}
+            {/* date filter (lazily loaded Flatpickr) */}
             <div style={{ ...S.dateWrap, marginBottom: '.75rem' }}>
-              <Flatpickr
-                options={{ mode: 'range', dateFormat: 'M j, Y', defaultDate: [expStart, expEnd] }}
-                onChange={([s, e]) => { if (s && e) { setExpStart(s); setExpEnd(e); } }}
-                style={S.dateInput}
-                placeholder="Filter by dates"
-              />
+              <Suspense fallback={<div style={{ ...S.dateInput, color: C.muted }}>Loading…</div>}>
+                <LazyDatePicker
+                  start={expStart} end={expEnd}
+                  onChange={(s, e) => { setExpStart(s); setExpEnd(e); }}
+                  style={S.dateInput}
+                  placeholder="Filter by dates"
+                />
+              </Suspense>
               <Calendar size={13} style={S.dateIcon}/>
             </div>
             <div style={S.logScroll}>

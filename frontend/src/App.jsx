@@ -531,8 +531,12 @@ export default function App() {
   );
 
   // ── SET MENU PAGE ─────────────────────────────────────
+  // NOTE: no hooks may be called inside this component. It is invoked as a
+  // plain function during App's render (see the main return below), so a hook
+  // here would change App's hook count between tab switches and crash React
+  // ("Rendered more hooks than during the previous render" → blank screen).
+  // The debounced search value is therefore computed once at App level.
   const SetMenuPage = () => {
-    const debouncedSetMenuSearch = useDebounce(setMenuSearch, 250);
     const filtered = allMenuItems.filter(i => {
       if (setMenuVegOnly && i.item_type !== 'veg') return false;
       if (debouncedSetMenuSearch && !i.name.toLowerCase().includes(debouncedSetMenuSearch.toLowerCase())) return false;
