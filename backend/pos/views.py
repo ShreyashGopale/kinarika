@@ -7,7 +7,7 @@ from django.db import transaction
 from django.db.models import Sum, Count
 from django.db import models
 from django.utils import timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from .models import (
     Table, Category, MenuItem, Order, OrderItem, Customer,
     LoyaltyAccount, LoyaltyTransaction, Payment, User, DishSale, InventoryPurchase
@@ -197,6 +197,22 @@ def create_menu_item(request):
         return Response({'error': 'Name and price are required.'},
                         status=status.HTTP_400_BAD_REQUEST)
 
+    # Validate that price is a valid number (can be int or float string from frontend)
+    try:
+        price = Decimal(str(price))
+        if price < 0:
+            return Response({'error': 'Price cannot be negative.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+    except (InvalidOperation, TypeError, ValueError):
+        return Response({'error': 'Price must be a valid number.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate item_type against allowed choices
+    valid_types = [choice[0] for choice in MenuItem._meta.get_field('item_type').choices]
+    if item_type not in valid_types:
+        return Response({'error': f'Invalid item_type. Must be one of: {valid_types}.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
     # Get or create category
     if category_id:
         try:
@@ -228,26 +244,38 @@ def edit_menu_item(request, pk):
         item = MenuItem.objects.get(pk=pk)
     except MenuItem.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
-        
+
     name = request.data.get('name')
     if name is not None:
         item.name = name.strip()
-        
+
     price = request.data.get('price')
     if price is not None:
-        item.price = price
-        
+        try:
+            price = Decimal(str(price))
+            if price < 0:
+                return Response({'error': 'Price cannot be negative.'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            item.price = price
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'error': 'Price must be a valid number.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
     item_type = request.data.get('item_type')
     if item_type is not None:
+        valid_types = [choice[0] for choice in MenuItem._meta.get_field('item_type').choices]
+        if item_type not in valid_types:
+            return Response({'error': f'Invalid item_type. Must be one of: {valid_types}.'},
+                            status=status.HTTP_400_BAD_REQUEST)
         item.item_type = item_type
-        
+
     category_id = request.data.get('category_id')
     if category_id is not None:
         try:
             item.category = Category.objects.get(pk=category_id)
         except Category.DoesNotExist:
             pass
-            
+
     item.save()
     return Response(MenuItemSerializer(item).data)
 
@@ -261,6 +289,12 @@ def create_order(request):
     with transaction.atomic():
         order_type = request.data.get('order_type', 'dine-in')
         table_name = request.data.get('table_name', None)
+
+        # Validate order_type against model choices
+        valid_order_types = [choice[0] for choice in Order._meta.get_field('order_type').choices]
+        if order_type not in valid_order_types:
+            return Response({'error': f'Invalid order_type.'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         # Concurrent-safe order number
         last = Order.objects.select_for_update().order_by('id').last()
@@ -351,7 +385,11 @@ def update_order_item(request, pk, item_pk):
     except OrderItem.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
-    new_qty = int(request.data.get('quantity', oi.quantity))
+    new_qty_raw = request.data.get('quantity', oi.quantity)
+    try:
+        new_qty = int(new_qty_raw)
+    except (TypeError, ValueError):
+        return Response({'error': 'Quantity must be a valid integer.'}, status=status.HTTP_400_BAD_REQUEST)
     if new_qty <= 0:
         oi.delete()
     else:
@@ -441,9 +479,22 @@ def complete_bill(request, pk):
     except Order.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
-    discount_percentage = Decimal(request.data.get('discount_percentage', '0'))
-    use_free_veg = int(request.data.get('use_free_veg', 0))
-    use_free_nonveg = int(request.data.get('use_free_nonveg', 0))
+    # Validate numeric inputs from frontend
+    discount_raw = request.data.get('discount_percentage', '0')
+    try:
+        discount_percentage = Decimal(str(discount_raw))
+    except (InvalidOperation, TypeError, ValueError):
+        discount_percentage = Decimal('0')
+    if discount_percentage < 0 or discount_percentage > 100:
+        return Response({'error': 'Discount must be between 0 and 100.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        use_free_veg = int(request.data.get('use_free_veg', 0))
+        use_free_nonveg = int(request.data.get('use_free_nonveg', 0))
+    except (TypeError, ValueError):
+        return Response({'error': 'Free thali counts must be valid integers.'},
+                        status=status.HTTP_400_BAD_REQUEST)
     payment_method = request.data.get('payment_method', 'CASH')
 
     with transaction.atomic():
@@ -683,11 +734,21 @@ def inventory_list(request):
         return Response(InventoryPurchaseSerializer(purchases, many=True).data)
     
     # POST
-    item_name = request.data.get('item_name')
+    item_name = request.data.get('item_name', '').strip()
     purchase_price = request.data.get('purchase_price')
-    
+
     if not item_name or not purchase_price:
         return Response({'error': 'Item name and price are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate price is a valid number
+    try:
+        purchase_price = Decimal(str(purchase_price))
+        if purchase_price < 0:
+            return Response({'error': 'Price cannot be negative.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+    except (InvalidOperation, TypeError, ValueError):
+        return Response({'error': 'Price must be a valid number.'},
+                        status=status.HTTP_400_BAD_REQUEST)
         
     purchase = InventoryPurchase.objects.create(
         item_name=item_name,

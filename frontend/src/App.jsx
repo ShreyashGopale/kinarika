@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useDebounce } from './useDebounce';
 import api from './api';
 import {
   Home, LayoutGrid, UtensilsCrossed, ShoppingCart, List,
@@ -9,6 +10,16 @@ import {
 } from 'lucide-react';
 
 import Dashboard from './Dashboard';
+
+// Helper: safely parse a number, returning 0 instead of NaN for invalid input
+const safeParseFloat = (val) => {
+  const n = parseFloat(val);
+  return isNaN(n) ? 0 : n;
+};
+const safeParseInt = (val) => {
+  const n = parseInt(val, 10);
+  return isNaN(n) ? 0 : n;
+};
 
 // ════════════════════════════════════════════════════════════
 //  MAIN APP
@@ -166,10 +177,12 @@ export default function App() {
     setActiveOrders(o.data); setDashStats(d.data);
   };
 
-  const addExpense = async () => {
+   const addExpense = async () => {
     if (!newExpense.name.trim() || !newExpense.price) return;
     try {
-      const payload = { item_name: newExpense.name, purchase_price: parseFloat(newExpense.price) };
+      const price = safeParseFloat(newExpense.price);
+      if (price <= 0) { alert('Please enter a valid amount.'); return; }
+      const payload = { item_name: newExpense.name, purchase_price: price };
       await api.post('inventory/', payload);
       setNewExpense({ name: '', price: '' });
       const [dashR, expR] = await Promise.all([api.get('dashboard/'), api.get('inventory/')]);
@@ -211,14 +224,16 @@ export default function App() {
       return;
     }
     try {
+      const price = safeParseFloat(newItem.price);
+      if (price <= 0) { alert('Please enter a valid price.'); return; }
       const payload = {
         name: newItem.name.trim(),
-        price: parseFloat(newItem.price),
+        price,
         item_type: newItem.item_type,
         is_loyalty_eligible: newItem.is_loyalty_eligible,
       };
       if (newItem.category_id) {
-        payload.category_id = parseInt(newItem.category_id);
+        payload.category_id = safeParseInt(newItem.category_id);
       } else {
         payload.category_name = newItem.category_name.trim();
       }
@@ -247,11 +262,13 @@ export default function App() {
       alert('Name and price are required.'); return;
     }
     try {
+      const price = safeParseFloat(editItemState.price);
+      if (price <= 0) { alert('Please enter a valid price.'); return; }
       const payload = {
         name: editItemState.name.trim(),
-        price: parseFloat(editItemState.price),
+        price,
         item_type: editItemState.item_type,
-        category_id: editItemState.category_id ? parseInt(editItemState.category_id) : undefined,
+        category_id: editItemState.category_id ? safeParseInt(editItemState.category_id) : undefined,
         is_loyalty_eligible: editItemState.is_loyalty_eligible
       };
       const res = await api.patch(`menu/items/${editItemState.id}/edit/`, payload);
@@ -302,7 +319,7 @@ export default function App() {
     setCart(prev => {
       const found = prev.find(c => c.id === item.id);
       if (found) return prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c);
-      return [...prev, { id: item.id, name: item.name, price: parseFloat(item.price), item_type: item.item_type, qty: 1 }];
+      return [...prev, { id: item.id, name: item.name, price: safeParseFloat(item.price), item_type: item.item_type, qty: 1 }];
     });
     showToast(`+ ${item.name}`);
   };
@@ -378,8 +395,8 @@ export default function App() {
   const completeBill = async () => {
     if (!billingOrder) return;
     try {
-      await api.post(`billing/${billingOrder.id}/complete/`, {
-        discount_percentage: parseFloat(billingDiscount) || 0,
+       await api.post(`billing/${billingOrder.id}/complete/`, {
+        discount_percentage: safeParseFloat(billingDiscount),
         payment_method: billingMethod,
         use_free_veg: billingFreeVeg,
         use_free_nonveg: billingFreeNV,
@@ -401,14 +418,17 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
-  // ── Menu filtering ────────────────────────────────────────
+  // ── Menu filtering (debounced for smoother typing) ─────────
+  const debouncedSearch = useDebounce(search, 250);
+  const debouncedSetMenuSearch = useDebounce(setMenuSearch, 250);
+
   const filtered = useMemo(() => {
     return menuItems.filter(i => {
       if (vegOnly && i.item_type !== 'veg') return false;
-      if (search && !i.name.toLowerCase().includes(search.toLowerCase())) return false;
+      if (debouncedSearch && !i.name.toLowerCase().includes(debouncedSearch.toLowerCase())) return false;
       return true;
     });
-  }, [menuItems, search, vegOnly]);
+  }, [menuItems, debouncedSearch, vegOnly]);
 
   const visibleCats = useMemo(() => {
     const set = new Set();
@@ -419,7 +439,7 @@ export default function App() {
     return [...set];
   }, [filtered, categories]);
 
-  const shownItems = (search || vegOnly)
+  const shownItems = (debouncedSearch || vegOnly)
     ? filtered
     : activeCat === ''
       ? filtered
@@ -512,9 +532,10 @@ export default function App() {
 
   // ── SET MENU PAGE ─────────────────────────────────────
   const SetMenuPage = () => {
+    const debouncedSetMenuSearch = useDebounce(setMenuSearch, 250);
     const filtered = allMenuItems.filter(i => {
       if (setMenuVegOnly && i.item_type !== 'veg') return false;
-      if (setMenuSearch && !i.name.toLowerCase().includes(setMenuSearch.toLowerCase())) return false;
+      if (debouncedSetMenuSearch && !i.name.toLowerCase().includes(debouncedSetMenuSearch.toLowerCase())) return false;
       return true;
     });
 
@@ -523,7 +544,7 @@ export default function App() {
       return c ? c.name : 'Other';
     }))];
 
-    const shownItems = (setMenuSearch || setMenuVegOnly)
+    const shownItems = (debouncedSetMenuSearch || setMenuVegOnly)
       ? filtered
       : setMenuActiveCat === ''
         ? filtered
