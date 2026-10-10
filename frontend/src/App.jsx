@@ -6,10 +6,12 @@ import {
   Plus, Minus, Search, X, Check, LogOut, Trash2, RefreshCw,
   Ticket, CreditCard, Banknote, Smartphone, ClipboardList,
   ToggleLeft, ToggleRight, ArrowLeft, Clock, Phone, Gift,
-  Receipt, Printer, Eye, Edit2, MessageCircle, Bluetooth, Settings
+  Receipt, Printer, Eye, Edit2, MessageCircle, Bluetooth, Settings,
+  Users
 } from 'lucide-react';
 
 import Dashboard from './Dashboard';
+import CustomersPage from './CustomersPage';
 
 // Helper: safely parse a number, returning 0 instead of NaN for invalid input
 const safeParseFloat = (val) => {
@@ -65,6 +67,10 @@ export default function App() {
   const [billingLoyalty, setBillingLoyalty] = useState(null);
   const [billingFreeVeg, setBillingFreeVeg] = useState(0);
   const [billingFreeNV, setBillingFreeNV] = useState(0);
+  // FREETHALI coupon state
+  const [couponInput, setCouponInput] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [freeItemIds, setFreeItemIds] = useState([]);
 
   // --- history & receipt ---
   const [completedOrders, setCompletedOrders] = useState([]);
@@ -125,6 +131,17 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [showToast]);
+
+  // ── Auto-lookup loyalty when the billing phone is complete ──
+  // Keeps the FREETHALI coupon's available-points display live.
+  useEffect(() => {
+    const p = (billingPhone || '').trim();
+    if (/^\d{10}$/.test(p)) {
+      api.get(`loyalty/${p}/`)
+        .then(r => setBillingLoyalty(r.data))
+        .catch(() => setBillingLoyalty(null));
+    }
+  }, [billingPhone]);
 
 
 
@@ -378,6 +395,34 @@ export default function App() {
     setBillingLoyalty(null);
     setBillingFreeVeg(0);
     setBillingFreeNV(0);
+    setCouponInput('');
+    setCouponCode('');
+    setFreeItemIds([]);
+  };
+
+  // Apply the FREETHALI coupon – enables picking loyalty
+  // dishes to give away for free (10 points per thali).
+  const applyCoupon = () => {
+    const code = (couponInput || '').trim().toUpperCase();
+    if (code !== 'FREETHALI') {
+      alert('Invalid coupon code.');
+      return;
+    }
+    const hasLoyaltyItems = (billingOrder?.items || []).some(i => i.is_loyalty_eligible);
+    if (!hasLoyaltyItems) {
+      alert('No loyalty-eligible (⭐) dishes in this bill.');
+      return;
+    }
+    if (!billingPhone.trim()) {
+      alert('Enter the customer phone number to use FREETHALI.');
+      return;
+    }
+    setCouponCode('FREETHALI');
+    showToast('FREETHALI applied — pick free dishes');
+  };
+
+  const toggleFreeItem = (id) => {
+    setFreeItemIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
   const lookupLoyalty = async () => {
@@ -395,18 +440,38 @@ export default function App() {
   const completeBill = async () => {
     if (!billingOrder) return;
     try {
-       await api.post(`billing/${billingOrder.id}/complete/`, {
+      const couponApplied = couponCode.trim().toUpperCase() === 'FREETHALI';
+      const res = await api.post(`billing/${billingOrder.id}/complete/`, {
         discount_percentage: safeParseFloat(billingDiscount),
         payment_method: billingMethod,
-        use_free_veg: billingFreeVeg,
-        use_free_nonveg: billingFreeNV,
+        use_free_veg: couponApplied ? 0 : billingFreeVeg,
+        use_free_nonveg: couponApplied ? 0 : billingFreeNV,
+        phone_number: billingPhone.trim(),
+        free_item_ids: couponApplied ? freeItemIds : [],
       });
       const completedRes = await api.get(`orders/${billingOrder.id}/`);
       setReceiptOrder(completedRes.data);
       setBillingOrder(null);
       await refreshOrders();
       await refreshTables();
-      showToast('Bill completed ✓');
+      // Feedback on loyalty + WhatsApp auto-send
+      const loyalty = res.data?.loyalty;
+      const whatsapp = res.data?.whatsapp;
+      if (whatsapp?.sent) {
+        showToast('Bill completed ✓ · WhatsApp sent');
+      } else if (whatsapp && !whatsapp.sent) {
+        showToast('Bill completed ✓');
+      } else {
+        showToast('Bill completed ✓');
+      }
+      if (loyalty) {
+        setBillingLoyalty({
+          free_veg_balance: loyalty.free_veg_balance,
+          free_nonveg_balance: loyalty.free_nonveg_balance,
+          veg_paid_count: loyalty.veg_paid_count,
+          nonveg_paid_count: loyalty.nonveg_paid_count,
+        });
+      }
     } catch (err) { alert(err.response?.data?.error || 'Billing error'); }
   };
 
@@ -615,7 +680,7 @@ export default function App() {
                       <div className="menu-row__info">
                         <div className="menu-row__name">
                           <div className={`veg-dot ${item.item_type === 'veg' ? 'veg-dot--veg' : 'veg-dot--nv'}`}><div className="veg-dot__inner"/></div>
-                          <h3>{item.name}</h3>
+                          <h3>{item.name}{item.is_loyalty_eligible ? ' ⭐' : ''}</h3>
                         </div>
                         <span className="menu-row__price">₹{item.price}</span>
                       </div>
@@ -676,6 +741,12 @@ export default function App() {
                   onClick={() => setNewItem({ ...newItem, item_type: 'veg' })}>🟢 Veg</button>
                 <button className={`btn btn--sm flex-1 ${newItem.item_type === 'non-veg' ? 'btn--danger' : 'btn--outline'}`}
                   onClick={() => setNewItem({ ...newItem, item_type: 'non-veg' })}>🔴 Non-Veg</button>
+              </div>
+
+              <div className="flex items-center gap-sm mb-2" style={{ marginTop: '.5rem' }}>
+                <input type="checkbox" id="newLoyaltyCheck" checked={newItem.is_loyalty_eligible} 
+                  onChange={e => setNewItem({ ...newItem, is_loyalty_eligible: e.target.checked })} />
+                <label htmlFor="newLoyaltyCheck" className="text-sm fw-700">Loyalty Program Eligible (Thali)</label>
               </div>
 
               <label className="text-xs text-muted fw-700">Category</label>
@@ -796,7 +867,7 @@ export default function App() {
                   <div className="menu-row__info">
                     <div className="menu-row__name">
                       <div className={`veg-dot ${isVeg ? 'veg-dot--veg' : 'veg-dot--nv'}`}><div className="veg-dot__inner"/></div>
-                      <h3>{item.name}</h3>
+                      <h3>{item.name}{item.is_loyalty_eligible ? ' ⭐' : ''}</h3>
                     </div>
                     <span className="menu-row__price">₹{item.price}</span>
                   </div>
@@ -863,7 +934,7 @@ export default function App() {
                   <div className="order-card__items">
                     {order.items?.map(item => (
                       <div key={item.id} className="order-card__item">
-                        <span>{item.quantity}× {item.name_snapshot}</span>
+                        <span>{item.quantity}× {item.name_snapshot}{item.is_loyalty_eligible ? ' ⭐' : ''}</span>
                         <span className="fw-700">₹{(parseFloat(item.price_snapshot) * item.quantity).toFixed(0)}</span>
                       </div>
                     ))}
@@ -903,10 +974,20 @@ export default function App() {
   // ════════════════════════════════════════════════════════
   const BillingModal = () => {
     if (!billingOrder) return null;
+    const couponApplied = couponCode.trim().toUpperCase() === 'FREETHALI';
     const subtotal = billingOrder.items?.reduce((s, i) => s + parseFloat(i.price_snapshot) * i.quantity, 0) || 0;
+    // FREETHALI – chosen loyalty dishes become free
+    const freeItemsTotal = couponApplied
+      ? (billingOrder.items || []).filter(i => freeItemIds.includes(i.id))
+          .reduce((s, i) => s + parseFloat(i.price_snapshot) * i.quantity, 0)
+      : 0;
+    const adjusted = subtotal - freeItemsTotal;
     const disc = parseFloat(billingDiscount) || 0;
-    const discAmt = (subtotal * disc) / 100;
-    const final_total = subtotal - discAmt;
+    const discAmt = (adjusted * disc) / 100;
+    const final_total = adjusted - discAmt;
+    const vegPoints = billingLoyalty ? (billingLoyalty.free_veg_balance * 10 + billingLoyalty.veg_paid_count) : 0;
+    const nonvegPoints = billingLoyalty ? (billingLoyalty.free_nonveg_balance * 10 + billingLoyalty.nonveg_paid_count) : 0;
+    const loyaltyItems = (billingOrder.items || []).filter(i => i.is_loyalty_eligible);
 
     return (
       <div className="modal" onClick={() => setBillingOrder(null)}>
@@ -917,11 +998,44 @@ export default function App() {
           <div className="flex-col gap-sm mb-2" style={{ maxHeight: '10rem', overflowY: 'auto' }}>
             {billingOrder.items?.map(i => (
               <div key={i.id} className="flex justify-between text-sm">
-                <span>{i.quantity}× {i.name_snapshot}</span>
+                <span>{i.quantity}× {i.name_snapshot}{i.is_loyalty_eligible ? ' ⭐' : ''}</span>
                 <span className="fw-700">₹{(parseFloat(i.price_snapshot) * i.quantity).toFixed(0)}</span>
               </div>
             ))}
           </div>
+
+          {/* FREETHALI coupon */}
+          <p className="text-xs text-muted fw-700 mb-1">Coupon (optional)</p>
+          <div className="flex gap-sm mb-1">
+            <input className="input" placeholder="FREETHALI" value={couponInput}
+              onChange={e => setCouponInput(e.target.value)}
+              style={{ flex: 1, textTransform: 'uppercase' }} />
+            <button className="btn btn--info btn--sm" onClick={applyCoupon} disabled={couponApplied}>Apply</button>
+          </div>
+          {couponApplied && (
+            <div style={{ background: 'var(--warning-light)', border: '1px solid var(--warning-border)', borderRadius: 'var(--r-xl)', padding: '.75rem', marginBottom: '.75rem' }}>
+              <p className="text-xs fw-700 mb-1" style={{ color: 'var(--warning)' }}>FREETHALI – pick dishes to give free (10 pts each)</p>
+              <p className="text-xs text-muted mb-1">Veg points: {vegPoints} · Non-veg points: {nonvegPoints}</p>
+              {loyaltyItems.length === 0 && <p className="text-xs text-muted">No loyalty-eligible (⭐) dishes in this bill.</p>}
+              <div className="flex-col" style={{ gap: '.35rem' }}>
+                {loyaltyItems.map(item => {
+                  const isFree = freeItemIds.includes(item.id);
+                  return (
+                    <div key={item.id} className="flex justify-between items-center" style={{ padding: '.3rem 0', borderBottom: '1px solid var(--border)' }}>
+                      <span className="text-sm">⭐ {item.name_snapshot} ×{item.quantity} <span className="text-xs text-muted">({item.item_type})</span></span>
+                      <button className={`btn btn--sm ${isFree ? 'btn--success' : 'btn--outline'}`}
+                        onClick={() => toggleFreeItem(item.id)}>
+                        {isFree ? 'Free ✓' : 'Make free'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {freeItemsTotal > 0 && (
+                <p className="text-xs fw-700 mt-1" style={{ color: 'var(--success)' }}>Free value: −₹{freeItemsTotal.toFixed(0)}</p>
+              )}
+            </div>
+          )}
 
           {/* Customer phone (optional loyalty) */}
           <div style={{ background: 'var(--info-light)', border: '1px solid var(--info-border)', borderRadius: 'var(--r-xl)', padding: '.75rem', marginBottom: '.75rem' }}>
@@ -933,20 +1047,25 @@ export default function App() {
             </div>
             {billingLoyalty && (
               <div style={{ marginTop: '.5rem', fontSize: '.8rem' }}>
-                <div className="flex justify-between"><span>Free Veg Thalis: <b>{billingLoyalty.free_veg_balance}</b></span>
-                  {billingLoyalty.free_veg_balance > 0 && <div className="flex items-center gap-sm">
-                    <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeVeg(Math.max(0, billingFreeVeg - 1))} disabled={billingFreeVeg <= 0}><Minus size={12}/></button>
-                    <span className="fw-700">{billingFreeVeg}</span>
-                    <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeVeg(Math.min(billingLoyalty.free_veg_balance, billingFreeVeg + 1))}><Plus size={12}/></button>
-                  </div>}
-                </div>
-                <div className="flex justify-between mt-1"><span>Free NV Thalis: <b>{billingLoyalty.free_nonveg_balance}</b></span>
-                  {billingLoyalty.free_nonveg_balance > 0 && <div className="flex items-center gap-sm">
-                    <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeNV(Math.max(0, billingFreeNV - 1))} disabled={billingFreeNV <= 0}><Minus size={12}/></button>
-                    <span className="fw-700">{billingFreeNV}</span>
-                    <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeNV(Math.min(billingLoyalty.free_nonveg_balance, billingFreeNV + 1))}><Plus size={12}/></button>
-                  </div>}
-                </div>
+                {/* Free-thali steppers – hidden once the coupon drives redemption */}
+                {!couponApplied && (
+                  <>
+                    <div className="flex justify-between"><span>Free Veg Thalis: <b>{billingLoyalty.free_veg_balance}</b></span>
+                      {billingLoyalty.free_veg_balance > 0 && <div className="flex items-center gap-sm">
+                        <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeVeg(Math.max(0, billingFreeVeg - 1))} disabled={billingFreeVeg <= 0}><Minus size={12}/></button>
+                        <span className="fw-700">{billingFreeVeg}</span>
+                        <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeVeg(Math.min(billingLoyalty.free_veg_balance, billingFreeVeg + 1))}><Plus size={12}/></button>
+                      </div>}
+                    </div>
+                    <div className="flex justify-between mt-1"><span>Free NV Thalis: <b>{billingLoyalty.free_nonveg_balance}</b></span>
+                      {billingLoyalty.free_nonveg_balance > 0 && <div className="flex items-center gap-sm">
+                        <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeNV(Math.max(0, billingFreeNV - 1))} disabled={billingFreeNV <= 0}><Minus size={12}/></button>
+                        <span className="fw-700">{billingFreeNV}</span>
+                        <button className="btn btn--sm btn--outline" onClick={() => setBillingFreeNV(Math.min(billingLoyalty.free_nonveg_balance, billingFreeNV + 1))}><Plus size={12}/></button>
+                      </div>}
+                    </div>
+                  </>
+                )}
                 <p className="text-xs text-muted mt-1">Veg progress: {billingLoyalty.veg_paid_count}/10 · NV progress: {billingLoyalty.nonveg_paid_count}/10</p>
               </div>
             )}
@@ -957,6 +1076,12 @@ export default function App() {
               <span className="text-sm text-muted">Subtotal</span>
               <span className="fw-700">₹{subtotal.toFixed(0)}</span>
             </div>
+            {freeItemsTotal > 0 && (
+              <div className="flex justify-between mb-1">
+                <span className="text-sm" style={{ color: 'var(--success)' }}>− Free Thali (FREETHALI)</span>
+                <span className="fw-700" style={{ color: 'var(--success)' }}>−₹{freeItemsTotal.toFixed(0)}</span>
+              </div>
+            )}
             <div className="flex items-center gap-sm mb-1">
               <span className="text-sm text-muted" style={{ whiteSpace: 'nowrap' }}>Discount %</span>
               <input className="input" type="number" min="0" max="100" value={billingDiscount}
@@ -1000,22 +1125,39 @@ export default function App() {
   // ════════════════════════════════════════════════════════
   //  RECEIPT MODAL & WHATSAPP
   // ════════════════════════════════════════════════════════
-  const sendWhatsAppBill = (order) => {
+  const sendWhatsAppBill = async (order) => {
     let phone = order.customer?.phone_number;
     if (!phone) {
       phone = prompt("No customer linked. Enter phone number to send WhatsApp bill:");
       if (!phone) return;
-      // Fire-and-forget attach API so window.open doesn't get blocked by popup blockers
-      api.post(`orders/${order.id}/attach_customer/`, { phone })
-        .then(() => showToast('Loyalty points successfully added!'))
-        .catch(console.error);
     }
-    
+    try {
+      // Attach the customer (grants loyalty points if the order was
+      // completed while unattached) and send the receipt via the
+      // Meta WhatsApp API.
+      const res = await api.post(`orders/${order.id}/send_whatsapp/`, { phone });
+      if (res.data?.sent) {
+        showToast('WhatsApp sent ✓ · Loyalty updated');
+      } else {
+        sendWhatsAppFallback(order, phone);
+        showToast('WhatsApp API not set up – opening WhatsApp');
+      }
+      loadHistory();
+    } catch (err) {
+      sendWhatsAppFallback(order, phone);
+      showToast('Opening WhatsApp (fallback)');
+    }
+  };
+
+  // Frontend fallback: open the wa.me deep link with the receipt
+  // text (used when the backend WhatsApp API is not configured).
+  const sendWhatsAppFallback = (order, phone) => {
     let text = `*Hotel Kinarika*\n\n`;
     text += `Order: ${order.order_number}\n`;
     text += `------------------------\n`;
     (order.items || []).forEach(i => {
-      text += `${i.quantity} x ${i.name_snapshot} - ₹${(parseFloat(i.price_snapshot) * i.quantity).toFixed(0)}\n`;
+      const star = i.is_loyalty_eligible ? ' ⭐' : '';
+      text += `${i.quantity} x ${i.name_snapshot}${star} - ₹${(parseFloat(i.price_snapshot) * i.quantity).toFixed(0)}\n`;
     });
     text += `------------------------\n`;
     if (parseFloat(order.free_thali_adjustment) > 0) {
@@ -1114,7 +1256,7 @@ export default function App() {
           </div>
           {items.map(i => (
             <div key={i.id} className="flex justify-between" style={{ marginBottom: '.2rem' }}>
-              <span>{i.quantity}× {i.name_snapshot}</span>
+              <span>{i.quantity}× {i.name_snapshot}{i.is_loyalty_eligible ? ' ⭐' : ''}</span>
               <span>₹{(parseFloat(i.price_snapshot) * i.quantity).toFixed(0)}</span>
             </div>
           ))}
@@ -1173,7 +1315,7 @@ export default function App() {
                   <div className="order-card__items">
                     {order.items?.map(i => (
                       <div key={i.id} className="order-card__item">
-                        <span>{i.quantity}× {i.name_snapshot}</span>
+                        <span>{i.quantity}× {i.name_snapshot}{i.is_loyalty_eligible ? ' ⭐' : ''}</span>
                         <span>₹{(parseFloat(i.price_snapshot) * i.quantity).toFixed(0)}</span>
                       </div>
                     ))}
@@ -1211,6 +1353,7 @@ export default function App() {
         {tab === 'orders' && OrdersPage()}
         {tab === 'history' && HistoryPage()}
         {tab === 'dashboard' && <Dashboard dashStats={dashStats} expenses={expenses} addExpense={addExpense} newExpense={newExpense} setNewExpense={setNewExpense} refreshDashboard={loadAll} />}
+        {tab === 'customers' && <CustomersPage />}
       </div>
 
       {/* Bottom Navigation */}
@@ -1222,6 +1365,7 @@ export default function App() {
             ['orders', List, 'Orders'],
             ['history', Clock, 'History'],
             ['dashboard', Banknote, 'Expenses'],
+            ['customers', Users, 'Customers'],
           ].map(([key, Icon, label]) => (
             <button key={key} className={`nav-btn ${tab === key ? 'active' : ''}`} onClick={() => { setTab(key); if (key === 'history') loadHistory(); }}>
               <span style={{ position: 'relative' }}>

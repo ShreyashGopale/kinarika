@@ -25,9 +25,24 @@ class MenuItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class OrderItemSerializer(serializers.ModelSerializer):
+    # Read-only fields derived from the related menu item so the frontend can
+    # show the veg/non-veg type and the loyalty (star) badge without a second
+    # request.
+    item_type = serializers.SerializerMethodField()
+    is_loyalty_eligible = serializers.SerializerMethodField()
+
     class Meta:
         model = OrderItem
-        fields = ['id', 'menu_item', 'name_snapshot', 'price_snapshot', 'quantity', 'is_free_redemption']
+        fields = [
+            'id', 'menu_item', 'name_snapshot', 'price_snapshot',
+            'quantity', 'is_free_redemption', 'item_type', 'is_loyalty_eligible',
+        ]
+
+    def get_item_type(self, obj):
+        return obj.menu_item.item_type if obj.menu_item else 'unknown'
+
+    def get_is_loyalty_eligible(self, obj):
+        return bool(obj.menu_item.is_loyalty_eligible) if obj.menu_item else False
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:

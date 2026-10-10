@@ -32,9 +32,16 @@ urlpatterns = [
     # Billing
     path('billing/<int:pk>/complete/', views.complete_bill),
     path('orders/<int:pk>/attach_customer/', views.attach_whatsapp_customer),
+    path('orders/<int:pk>/send_whatsapp/', views.send_order_whatsapp),
 
     # Loyalty
     path('loyalty/<str:phone>/', views.get_customer_loyalty),
+
+    # Customers
+    path('customers/<str:phone>/', views.customer_detail),
+
+    # WhatsApp webhook (Meta callback)
+    path('whatsapp/webhook/', views.whatsapp_webhook),
 
     # Dashboard
     path('dashboard/', views.dashboard_stats),

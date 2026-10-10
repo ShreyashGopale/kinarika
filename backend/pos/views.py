@@ -1,3 +1,4 @@
+import json
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
@@ -6,16 +7,20 @@ from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
 from django.db.models import Sum, Count
 from django.db import models
+from django.http import HttpResponse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from decimal import Decimal, InvalidOperation
 from .models import (
     Table, Category, MenuItem, Order, OrderItem, Customer,
-    LoyaltyAccount, LoyaltyTransaction, Payment, User, DishSale, InventoryPurchase
+    LoyaltyAccount, LoyaltyTransaction, Payment, User, DishSale,
+    InventoryPurchase, WhatsAppMessage
 )
 from .serializers import (
     TableSerializer, CategorySerializer, MenuItemSerializer,
-    OrderSerializer, CustomerSerializer
+    OrderSerializer, CustomerSerializer, PaymentSerializer
 )
+from .whatsapp import send_whatsapp, get_verify_token
 
 
 # ============================================================
@@ -192,6 +197,7 @@ def create_menu_item(request):
     item_type = request.data.get('item_type', 'veg')
     category_id = request.data.get('category_id')
     category_name = request.data.get('category_name', '').strip()
+    is_loyalty_eligible = bool(request.data.get('is_loyalty_eligible', False))
 
     if not name or not price:
         return Response({'error': 'Name and price are required.'},
@@ -232,6 +238,7 @@ def create_menu_item(request):
         item_type=item_type,
         category=cat,
         is_active=True,
+        is_loyalty_eligible=is_loyalty_eligible,
     )
     return Response(MenuItemSerializer(item).data,
                     status=status.HTTP_201_CREATED)
@@ -275,6 +282,10 @@ def edit_menu_item(request, pk):
             item.category = Category.objects.get(pk=category_id)
         except Category.DoesNotExist:
             pass
+
+    is_loyalty_eligible = request.data.get('is_loyalty_eligible')
+    if is_loyalty_eligible is not None:
+        item.is_loyalty_eligible = bool(is_loyalty_eligible)
 
     item.save()
     return Response(MenuItemSerializer(item).data)
@@ -465,9 +476,127 @@ def get_customer_loyalty(request, phone):
     })
 
 
+@api_view(['GET'])
+def customer_detail(request, phone):
+    """Customer profile: loyalty summary, completed orders and a
+    per-dish / per-date loyalty point history (derived from the
+    order items, so no extra writes are needed)."""
+    try:
+        customer = Customer.objects.get(phone_number=phone)
+    except Customer.DoesNotExist:
+        return Response({'error': 'Customer not found'},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    loyalty, _ = LoyaltyAccount.objects.get_or_create(customer=customer)
+
+    orders = Order.objects.filter(
+        customer=customer, status='COMPLETED'
+    ).order_by('-completed_at')
+
+    order_data = []
+    for o in orders:
+        try:
+            payment = PaymentSerializer(o.payment).data
+        except Exception:
+            payment = None
+        order_data.append({
+            'id': o.id,
+            'order_number': o.order_number,
+            'order_type': o.order_type,
+            'table_name': o.table_name,
+            'final_total': float(o.final_total),
+            'discount_amount': float(o.discount_amount),
+            'free_thali_adjustment': float(o.free_thali_adjustment),
+            'completed_at': o.completed_at.isoformat() if o.completed_at else None,
+            'payment': payment,
+            'items': [
+                {
+                    'name_snapshot': it.name_snapshot,
+                    'price_snapshot': float(it.price_snapshot),
+                    'quantity': it.quantity,
+                    'item_type': it.menu_item.item_type if it.menu_item else 'unknown',
+                    'is_loyalty_eligible': bool(it.menu_item.is_loyalty_eligible) if it.menu_item else False,
+                    'is_free_redemption': bool(it.is_free_redemption),
+                }
+                for it in o.items.select_related('menu_item').all()
+            ],
+        })
+
+    # Loyalty history: earned points come from loyalty-eligible items
+    # that were paid for; redeemed points from items flagged as free.
+    history = []
+    for o in orders:
+        for it in o.items.select_related('menu_item').all():
+            if not it.menu_item or not it.menu_item.is_loyalty_eligible:
+                continue
+            if it.is_free_redemption:
+                history.append({
+                    'type': it.menu_item.item_type,
+                    'dish': it.name_snapshot,
+                    'date': o.completed_at.isoformat() if o.completed_at else None,
+                    'quantity': it.quantity,
+                    'action': 'redeemed',
+                    'points': -10 * it.quantity,
+                })
+            else:
+                history.append({
+                    'type': it.menu_item.item_type,
+                    'dish': it.name_snapshot,
+                    'date': o.completed_at.isoformat() if o.completed_at else None,
+                    'quantity': it.quantity,
+                    'action': 'earned',
+                    'points': it.quantity,
+                })
+    history.sort(key=lambda h: h['date'] or '', reverse=True)
+
+    return Response({
+        'phone_number': customer.phone_number,
+        'name': customer.name,
+        'loyalty': {
+            'veg_points': loyalty.free_veg_balance * 10 + loyalty.veg_paid_count,
+            'nonveg_points': loyalty.free_nonveg_balance * 10 + loyalty.nonveg_paid_count,
+            'free_veg_balance': loyalty.free_veg_balance,
+            'free_nonveg_balance': loyalty.free_nonveg_balance,
+            'veg_paid_count': loyalty.veg_paid_count,
+            'nonveg_paid_count': loyalty.nonveg_paid_count,
+        },
+        'orders': order_data,
+        'loyalty_history': history,
+    })
+
+
 # ============================================================
 #  BILLING – atomic bill completion
 # ============================================================
+
+def build_receipt_text(order, loyalty=None):
+    """Plain-text receipt used for the WhatsApp message."""
+    lines = ['HOTEL KINARIKA', 'Veg & Non-Veg', '-' * 32]
+    lines.append(f'Order: {order.order_number}')
+    lines.append(f'Type: {order.order_type}')
+    if order.table_name:
+        lines.append(f'Table: {order.table_name}')
+    lines.append('-' * 32)
+    for item in order.items.select_related('menu_item').all():
+        amount = float(item.price_snapshot) * item.quantity
+        star = ' ⭐' if (item.menu_item and item.menu_item.is_loyalty_eligible) else ''
+        free_tag = ' (FREE)' if item.is_free_redemption else ''
+        lines.append(f'{item.quantity} x {item.name_snapshot}{star}{free_tag} - Rs{amount:.0f}')
+    lines.append('-' * 32)
+    if float(order.free_thali_adjustment) > 0:
+        lines.append(f'Free Thali Adj: -Rs{float(order.free_thali_adjustment):.0f}')
+    if float(order.discount_amount) > 0:
+        lines.append(f'Discount ({float(order.discount_percentage):.0f}%): -Rs{float(order.discount_amount):.0f}')
+    lines.append(f'TOTAL: Rs{float(order.final_total):.0f}')
+    if loyalty:
+        veg_points = loyalty.free_veg_balance * 10 + loyalty.veg_paid_count
+        nonveg_points = loyalty.free_nonveg_balance * 10 + loyalty.nonveg_paid_count
+        lines.append('-' * 32)
+        lines.append(f'Veg Loyalty Points: {veg_points}')
+        lines.append(f'Non-Veg Loyalty Points: {nonveg_points}')
+    lines.append('Thank you! Visit again.')
+    return '\n'.join(lines)
+
 
 @api_view(['POST'])
 def complete_bill(request, pk):
@@ -490,25 +619,75 @@ def complete_bill(request, pk):
                         status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        use_free_veg = int(request.data.get('use_free_veg', 0))
-        use_free_nonveg = int(request.data.get('use_free_nonveg', 0))
+        use_free_veg = int(request.data.get('use_free_veg', 0) or 0)
+        use_free_nonveg = int(request.data.get('use_free_nonveg', 0) or 0)
     except (TypeError, ValueError):
         return Response({'error': 'Free thali counts must be valid integers.'},
                         status=status.HTTP_400_BAD_REQUEST)
     payment_method = request.data.get('payment_method', 'CASH')
 
+    # Optional customer phone – create/lookup up front so the transaction
+    # only needs to link it.
+    phone_number = (request.data.get('phone_number') or '').strip()
+    customer = None
+    if phone_number:
+        customer, _ = Customer.objects.get_or_create(phone_number=phone_number)
+
+    # FREETHALI coupon – specific order-items chosen to be given free.
+    free_item_ids = request.data.get('free_item_ids', []) or []
+    if isinstance(free_item_ids, str):
+        try:
+            free_item_ids = json.loads(free_item_ids)
+        except ValueError:
+            free_item_ids = [p for p in free_item_ids.split(',') if p.strip()]
+    try:
+        free_item_ids = [int(i) for i in free_item_ids if str(i).strip() != '']
+    except (TypeError, ValueError):
+        free_item_ids = []
+
     with transaction.atomic():
         order = Order.objects.select_for_update().get(pk=pk)
+        if customer:
+            order.customer = customer
+
         loyalty = None
         if order.customer:
             loyalty, _ = LoyaltyAccount.objects.select_for_update().get_or_create(
                 customer=order.customer
             )
 
-        # Validate free-thali balances
-        if (use_free_veg > 0 or use_free_nonveg > 0) and not loyalty:
-            return Response({'error': 'No customer linked.'},
+        if (use_free_veg > 0 or use_free_nonveg > 0 or free_item_ids) and not loyalty:
+            return Response({'error': 'No customer linked. Enter a phone number.'},
                             status=status.HTTP_400_BAD_REQUEST)
+
+        items = list(order.items.select_related('menu_item').all())
+
+        # Calculate subtotal and loyalty-eligible thali counts
+        original_subtotal = Decimal('0.00')
+        veg_thalis = 0
+        nonveg_thalis = 0
+        for item in items:
+            original_subtotal += item.price_snapshot * item.quantity
+            if item.menu_item and item.menu_item.is_loyalty_eligible:
+                if item.menu_item.item_type == 'veg':
+                    veg_thalis += item.quantity
+                else:
+                    nonveg_thalis += item.quantity
+
+        # Determine which items are free. The FREETHALI coupon (free_item_ids)
+        # takes precedence over the manual steppers.
+        free_items = []
+        if free_item_ids:
+            id_set = set(free_item_ids)
+            free_items = [i for i in items
+                          if i.id in id_set and i.menu_item
+                          and i.menu_item.is_loyalty_eligible]
+            use_free_veg = sum(i.quantity for i in free_items
+                               if i.menu_item.item_type == 'veg')
+            use_free_nonveg = sum(i.quantity for i in free_items
+                                  if i.menu_item.item_type != 'veg')
+
+        # Validate free-thali balances BEFORE making any changes
         if loyalty:
             if loyalty.free_veg_balance < use_free_veg:
                 return Response({'error': 'Not enough free Veg Thalis.'},
@@ -517,33 +696,32 @@ def complete_bill(request, pk):
                 return Response({'error': 'Not enough free Non-Veg Thalis.'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
-        # Calculate subtotal
-        original_subtotal = Decimal('0.00')
+        # Apply the free-thali adjustment
         free_thali_adjustment = Decimal('0.00')
-        veg_thalis = 0
-        nonveg_thalis = 0
-
-        for item in order.items.select_related('menu_item').all():
-            original_subtotal += item.price_snapshot * item.quantity
-            if item.menu_item and item.menu_item.is_loyalty_eligible:
-                if item.menu_item.item_type == 'veg':
-                    veg_thalis += item.quantity
-                else:
-                    nonveg_thalis += item.quantity
-
-        # Free-thali adjustment
-        remaining_free_veg = use_free_veg
-        remaining_free_nonveg = use_free_nonveg
-        for item in order.items.select_related('menu_item').all():
-            if item.menu_item and item.menu_item.is_loyalty_eligible:
-                if remaining_free_veg > 0 and item.menu_item.item_type == 'veg':
-                    count = min(remaining_free_veg, item.quantity)
-                    free_thali_adjustment += item.price_snapshot * count
-                    remaining_free_veg -= count
-                elif remaining_free_nonveg > 0 and item.menu_item.item_type == 'non-veg':
-                    count = min(remaining_free_nonveg, item.quantity)
-                    free_thali_adjustment += item.price_snapshot * count
-                remaining_free_nonveg -= count
+        if free_item_ids:
+            # Coupon path – each chosen loyalty-eligible line becomes free
+            for item in free_items:
+                item.is_free_redemption = True
+                item.save(update_fields=['is_free_redemption'])
+                free_thali_adjustment += item.price_snapshot * item.quantity
+        else:
+            # Stepper path – apply free thalis first-come (legacy behaviour)
+            remaining_free_veg = use_free_veg
+            remaining_free_nonveg = use_free_nonveg
+            for item in items:
+                if item.menu_item and item.menu_item.is_loyalty_eligible:
+                    freed = 0
+                    if remaining_free_veg > 0 and item.menu_item.item_type == 'veg':
+                        freed = min(remaining_free_veg, item.quantity)
+                        remaining_free_veg -= freed
+                    elif remaining_free_nonveg > 0 and item.menu_item.item_type == 'non-veg':
+                        freed = min(remaining_free_nonveg, item.quantity)
+                        remaining_free_nonveg -= freed
+                    if freed > 0:
+                        if freed == item.quantity:
+                            item.is_free_redemption = True
+                            item.save(update_fields=['is_free_redemption'])
+                        free_thali_adjustment += item.price_snapshot * freed
 
         adjusted = original_subtotal - free_thali_adjustment
         discount_amount = (adjusted * discount_percentage) / Decimal('100')
@@ -602,7 +780,124 @@ def complete_bill(request, pk):
                 loyalty.nonveg_paid_count %= 10
             loyalty.save()
 
-    return Response(OrderSerializer(order).data)
+    # Auto-send the receipt via WhatsApp (outside the transaction so a
+    # failed send never rolls back the completed bill).
+    whatsapp_result = {'sent': False}
+    if phone_number and loyalty:
+        receipt_text = build_receipt_text(order, loyalty)
+        ok, resp = send_whatsapp(phone_number, receipt_text)
+        WhatsAppMessage.objects.create(
+            order=order,
+            phone_number=phone_number,
+            message_content=receipt_text,
+            status='SENT' if ok else 'FAILED',
+        )
+        whatsapp_result = {'sent': ok, 'detail': resp}
+
+    serialized = OrderSerializer(order).data
+    if loyalty:
+        serialized['loyalty'] = {
+            'veg_paid_count': loyalty.veg_paid_count,
+            'nonveg_paid_count': loyalty.nonveg_paid_count,
+            'free_veg_balance': loyalty.free_veg_balance,
+            'free_nonveg_balance': loyalty.free_nonveg_balance,
+        }
+    serialized['whatsapp'] = whatsapp_result
+    return Response(serialized)
+
+
+# ============================================================
+#  WHATSAPP – webhook + manual receipt send
+# ============================================================
+
+@csrf_exempt
+def whatsapp_webhook(request):
+    """Meta WhatsApp Cloud API webhook.
+
+    GET  – webhook verification (Meta echoes back hub.challenge when
+           the verify token matches).
+    POST – message status / inbound message events.
+    """
+    if request.method == 'GET':
+        mode = request.GET.get('hub.mode')
+        token = request.GET.get('hub.verify_token')
+        challenge = request.GET.get('hub.challenge')
+        if mode == 'subscribe' and token == get_verify_token():
+            return HttpResponse(challenge, status=200,
+                                content_type='text/plain')
+        return HttpResponse('Forbidden', status=403)
+
+    # Acknowledge event callbacks immediately. Message-status and
+    # inbound events could be persisted here if needed later.
+    return HttpResponse('OK', status=200)
+
+
+@api_view(['POST'])
+def send_order_whatsapp(request, pk):
+    """Attach a customer (granting loyalty points if the order was
+    completed while unattached) and send the receipt via WhatsApp."""
+    try:
+        order = Order.objects.get(pk=pk)
+    except Order.DoesNotExist:
+        return Response({'error': 'Order not found'},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    phone = (request.data.get('phone') or '').strip()
+    if not phone and order.customer:
+        phone = order.customer.phone_number
+    if not phone:
+        return Response({'error': 'Phone number required'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # Attach customer + grant points atomically
+    with transaction.atomic():
+        customer, _ = Customer.objects.get_or_create(phone_number=phone)
+        loyalty, _ = LoyaltyAccount.objects.select_for_update().get_or_create(
+            customer=customer
+        )
+        old_customer = order.customer
+        order.customer = customer
+        order.save()
+
+        # If the order is COMPLETED and previously had NO customer,
+        # grant the points now.
+        if order.status == 'COMPLETED' and not old_customer:
+            veg_thalis = 0
+            nonveg_thalis = 0
+            for item in order.items.select_related('menu_item').all():
+                if (item.menu_item and item.menu_item.is_loyalty_eligible
+                        and not item.is_free_redemption):
+                    if item.menu_item.item_type == 'veg':
+                        veg_thalis += item.quantity
+                    else:
+                        nonveg_thalis += item.quantity
+
+            loyalty.veg_paid_count += veg_thalis
+            if loyalty.veg_paid_count >= 10:
+                loyalty.free_veg_balance += loyalty.veg_paid_count // 10
+                loyalty.veg_paid_count %= 10
+
+            loyalty.nonveg_paid_count += nonveg_thalis
+            if loyalty.nonveg_paid_count >= 10:
+                loyalty.free_nonveg_balance += loyalty.nonveg_paid_count // 10
+                loyalty.nonveg_paid_count %= 10
+
+            loyalty.save()
+
+    # Send the receipt (outside the transaction)
+    receipt_text = build_receipt_text(order, loyalty)
+    ok, resp = send_whatsapp(phone, receipt_text)
+    WhatsAppMessage.objects.create(
+        order=order,
+        phone_number=phone,
+        message_content=receipt_text,
+        status='SENT' if ok else 'FAILED',
+    )
+    return Response({
+        'sent': ok,
+        'detail': resp,
+        'order': OrderSerializer(order).data,
+    })
 
 
 # ============================================================
