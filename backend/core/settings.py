@@ -85,6 +85,10 @@ if DATABASE_URL:
             ssl_require=True,
         )
     }
+    # Ensure SSL is required for Supabase
+    if 'OPTIONS' not in DATABASES['default']:
+        DATABASES['default']['OPTIONS'] = {}
+    DATABASES['default']['OPTIONS']['sslmode'] = 'require'
 elif os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
     DATABASES = {
         'default': {
@@ -93,7 +97,7 @@ elif os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
             'USER': os.environ.get('POSTGRES_USER') or os.environ.get('PGUSER') or 'postgres.lrujygyuchccliabhfxg',
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD') or os.environ.get('PGPASSWORD') or 'OmkarWalunj@12345', 
             'HOST': os.environ.get('POSTGRES_HOST') or os.environ.get('PGHOST') or 'aws-0-ap-south-1.pooler.supabase.com',
-            'PORT': os.environ.get('POSTGRES_PORT') or os.environ.get('PGPORT') or '5432',
+            'PORT': os.environ.get('POSTGRES_PORT') or os.environ.get('PGPORT') or '6543',
             'OPTIONS': {
                 'sslmode': 'require',
             },
