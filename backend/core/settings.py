@@ -88,6 +88,9 @@ if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'OmkarWalunj@12345'), 
             'HOST': os.environ.get('POSTGRES_HOST', 'aws-0-ap-south-1.pooler.supabase.com'),
             'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'OPTIONS': {
+                'sslmode': 'require',
+            },
         }
     }
 
