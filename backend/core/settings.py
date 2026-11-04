@@ -74,26 +74,31 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
-
-import os
-# Use Supabase PostgreSQL on Vercel or when POSTGRES_DB is set; SQLite locally
-if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
+# Use DATABASE_URL if provided by Vercel/Supabase
+import dj_database_url
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
+elif os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('POSTGRES_DB', 'postgres'),
-            'USER': os.environ.get('POSTGRES_USER', 'postgres.lrujygyuchccliabhfxg'),
-            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'OmkarWalunj@12345'), 
-            'HOST': os.environ.get('POSTGRES_HOST', 'aws-0-ap-south-1.pooler.supabase.com'),
-            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'NAME': os.environ.get('POSTGRES_DB') or os.environ.get('PGDATABASE') or 'postgres',
+            'USER': os.environ.get('POSTGRES_USER') or os.environ.get('PGUSER') or 'postgres.lrujygyuchccliabhfxg',
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD') or os.environ.get('PGPASSWORD') or 'OmkarWalunj@12345', 
+            'HOST': os.environ.get('POSTGRES_HOST') or os.environ.get('PGHOST') or 'aws-0-ap-south-1.pooler.supabase.com',
+            'PORT': os.environ.get('POSTGRES_PORT') or os.environ.get('PGPORT') or '5432',
             'OPTIONS': {
                 'sslmode': 'require',
             },
         }
     }
-
 else:
     DATABASES = {
         'default': {
