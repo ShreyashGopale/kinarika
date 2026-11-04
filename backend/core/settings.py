@@ -74,35 +74,44 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 
-# Use DATABASE_URL if provided by Vercel/Supabase
+# Database
+# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
+
 import dj_database_url
+
 DATABASE_URL = os.environ.get('DATABASE_URL')
+
 if DATABASE_URL:
     DATABASES = {
         'default': dj_database_url.config(
             default=DATABASE_URL,
             conn_max_age=600,
-            ssl_require=True,
         )
     }
-    # Ensure SSL is required for Supabase
-    if 'OPTIONS' not in DATABASES['default']:
-        DATABASES['default']['OPTIONS'] = {}
-    DATABASES['default']['OPTIONS']['sslmode'] = 'require'
-elif os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
+    # Only enforce SSL if using the pooler
+    host = DATABASES['default'].get('HOST', '')
+    if 'pooler.supabase.com' in str(host):
+        DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = 'require'
+elif os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL') or os.environ.get('POSTGRES_HOST') or os.environ.get('PGHOST'):
+    host = os.environ.get('POSTGRES_HOST') or os.environ.get('PGHOST') or 'db.lrujygyuchccliabhfxg.supabase.co'
+    port = os.environ.get('POSTGRES_PORT') or os.environ.get('PGPORT') or '5432'
+    user = os.environ.get('POSTGRES_USER') or os.environ.get('PGUSER') or 'postgres.lrujygyuchccliabhfxg'
+    password = os.environ.get('POSTGRES_PASSWORD') or os.environ.get('PGPASSWORD') or 'OmkarWalunj@12345'
+    name = os.environ.get('POSTGRES_DB') or os.environ.get('PGDATABASE') or 'postgres'
+
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('POSTGRES_DB') or os.environ.get('PGDATABASE') or 'postgres',
-            'USER': os.environ.get('POSTGRES_USER') or os.environ.get('PGUSER') or 'postgres.lrujygyuchccliabhfxg',
-            'PASSWORD': os.environ.get('POSTGRES_PASSWORD') or os.environ.get('PGPASSWORD') or 'OmkarWalunj@12345', 
-            'HOST': os.environ.get('POSTGRES_HOST') or os.environ.get('PGHOST') or 'aws-0-ap-south-1.pooler.supabase.com',
-            'PORT': os.environ.get('POSTGRES_PORT') or os.environ.get('PGPORT') or '6543',
-            'OPTIONS': {
-                'sslmode': 'require',
-            },
+            'NAME': name,
+            'USER': user,
+            'PASSWORD': password,
+            'HOST': host,
+            'PORT': port,
         }
     }
+    # Only add SSL when using Supabase transaction/session pooler
+    if 'pooler.supabase.com' in host:
+        DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = 'require'
 else:
     DATABASES = {
         'default': {
