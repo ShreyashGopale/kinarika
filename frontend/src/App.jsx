@@ -72,9 +72,11 @@ export default function App() {
   const [couponCode, setCouponCode] = useState('');
   const [freeItemIds, setFreeItemIds] = useState([]);
 
-  // --- history & receipt ---
-  const [completedOrders, setCompletedOrders] = useState([]);
-  const [receiptOrder, setReceiptOrder] = useState(null);
+  // --- add items to existing order modal ---
+  const [addItemsOrder, setAddItemsOrder] = useState(null);
+  const [addItemsCart, setAddItemsCart] = useState([]);
+  const [addItemsSearch, setAddItemsSearch] = useState('');
+  const [addItemsVegOnly, setAddItemsVegOnly] = useState(false);
 
   // --- set menu ---
   const [allMenuItems, setAllMenuItems] = useState([]);
@@ -85,6 +87,8 @@ export default function App() {
   const [newItem, setNewItem] = useState({ name: '', price: '', item_type: 'veg', category_id: '', category_name: '', is_loyalty_eligible: false });
   const [editItemModal, setEditItemModal] = useState(false);
   const [editItemState, setEditItemState] = useState(null);
+
+  // --- add items to existing order ---
 
   // --- expenses ---
   const [expenses, setExpenses] = useState([]);
@@ -297,7 +301,18 @@ export default function App() {
     } catch (err) { alert(err.response?.data?.error || 'Failed to update dish'); }
   };
 
-  // ── Table management ─────────────────────────────────────
+  const deleteMenuItem = async (itemId) => {
+    if (!confirm('Delete this item from the menu? This cannot be undone.')) return;
+    try {
+      await api.delete(`menu/items/${itemId}/delete/`);
+      setAllMenuItems(prev => prev.filter(i => i.id !== itemId));
+      setMenuItems(prev => prev.filter(i => i.id !== itemId));
+      showToast('Item deleted');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete item');
+    }
+  };
+
   const addTable = async () => {
     const name = newTableName.trim();
     if (!name) return;
@@ -684,7 +699,7 @@ export default function App() {
                         </div>
                         <span className="menu-row__price">₹{item.price}</span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexShrink: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '.4rem', flexShrink: 0 }}>
                         <button
                           onClick={() => {
                             setEditItemState({
@@ -700,7 +715,14 @@ export default function App() {
                           style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '.25rem' }}
                           title="Edit Dish"
                         >
-                          <Edit2 size={20} color="var(--text-light)" />
+                          <Edit2 size={18} color="var(--text-light)" />
+                        </button>
+                        <button
+                          onClick={() => deleteMenuItem(item.id)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '.25rem' }}
+                          title="Delete Dish"
+                        >
+                          <Trash2 size={18} color="var(--danger)" />
                         </button>
                         <button
                           onClick={() => toggleItem(item.id)}
@@ -708,8 +730,8 @@ export default function App() {
                           title={item.is_active ? 'Remove from today\'s menu' : 'Add to today\'s menu'}
                         >
                           {item.is_active
-                            ? <ToggleRight size={28} color="var(--success)" />
-                            : <ToggleLeft size={28} color="var(--text-light)" />
+                            ? <ToggleRight size={26} color="var(--success)" />
+                            : <ToggleLeft size={26} color="var(--text-light)" />
                           }
                         </button>
                       </div>
@@ -941,22 +963,25 @@ export default function App() {
                   </div>
                   <div className="flex items-center justify-between" style={{ borderTop: '1px solid var(--border)', paddingTop: '.6rem' }}>
                     <span className="fw-900" style={{ color: 'var(--primary)', fontSize: '1.1rem' }}>₹{subtotal.toFixed(0)}</span>
-                    <div className="flex gap-sm">
-                      <button className="btn btn--danger btn--sm" onClick={async () => {
-                        if (!confirm('Delete this order?')) return;
-                        try {
-                          await api.delete(`orders/${order.id}/`);
-                          await refreshOrders();
-                          await refreshTables();
-                          showToast('Order deleted');
-                        } catch (err) { alert('Failed to delete order'); }
-                      }}>
-                        <Trash2 size={14}/>
-                      </button>
-                      <button className="btn btn--primary btn--sm" onClick={() => openBilling(order)}>
-                        <CreditCard size={14}/> Bill
-                      </button>
-                    </div>
+                  <div className="flex gap-sm">
+                    <button className="btn btn--info btn--sm" onClick={() => openAddItemsToOrder(order)}>
+                      <Plus size={14}/> Add Items
+                    </button>
+                    <button className="btn btn--danger btn--sm" onClick={async () => {
+                      if (!confirm('Delete this order?')) return;
+                      try {
+                        await api.delete(`orders/${order.id}/`);
+                        await refreshOrders();
+                        await refreshTables();
+                        showToast('Order deleted');
+                      } catch (err) { alert('Failed to delete order'); }
+                    }}>
+                      <Trash2 size={14}/>
+                    </button>
+                    <button className="btn btn--primary btn--sm" onClick={() => openBilling(order)}>
+                      <CreditCard size={14}/> Bill
+                    </button>
+                  </div>
                   </div>
                 </div>
               );
@@ -1378,6 +1403,73 @@ export default function App() {
           ))}
         </div>
       </nav>
+
+      {/* Add Items to Existing Order Modal */}
+      {addItemsOrder && (
+        <div className="modal" onClick={() => setAddItemsOrder(null)}>
+          <div className="modal__card" onClick={e => e.stopPropagation()} style={{ maxWidth: '36rem', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h2 className="mb-1">Add Items – {addItemsOrder.order_number}</h2>
+            <p className="text-xs text-muted mb-2">{addItemsOrder.table_name ? `Table: ${addItemsOrder.table_name}` : addItemsOrder.order_type}</p>
+
+            <div className="search-wrap mb-1">
+              <Search className="search-wrap__icon" size={17}/>
+              <input className="input" placeholder="Search dishes…" value={addItemsSearch} onChange={e => setAddItemsSearch(e.target.value)} />
+              {addItemsSearch && <button style={{ position:'absolute', right:'.6rem', top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:'var(--text-light)', cursor:'pointer' }} onClick={() => setAddItemsSearch('')}><X size={15}/></button>}
+            </div>
+            <button
+              onClick={() => setAddItemsVegOnly(!addItemsVegOnly)}
+              className={`btn btn--sm mb-1 ${addItemsVegOnly ? 'btn--success' : 'btn--outline'}`}
+            >Veg Only</button>
+
+            <div className="flex-col gap-sm mb-2" style={{ maxHeight: '14rem', overflowY: 'auto' }}>
+              {menuItems
+                .filter(i => {
+                  if (addItemsVegOnly && i.item_type !== 'veg') return false;
+                  if (addItemsSearch && !i.name.toLowerCase().includes(addItemsSearch.toLowerCase())) return false;
+                  return true;
+                })
+                .map(item => (
+                  <div key={item.id} className="menu-row" style={{ padding: '.5rem .75rem' }}>
+                    <div className="menu-row__info">
+                      <div className="menu-row__name">
+                        <div className={`veg-dot ${item.item_type === 'veg' ? 'veg-dot--veg' : 'veg-dot--nv'}`}><div className="veg-dot__inner"/></div>
+                        <h3 style={{ fontSize: '.9rem' }}>{item.name}{item.is_loyalty_eligible ? ' ⭐' : ''}</h3>
+                      </div>
+                      <span className="menu-row__price">₹{item.price}</span>
+                    </div>
+                    <button className="btn btn--outline btn--sm" onClick={() => addToAddItemsCart(item)}><Plus size={14}/> Add</button>
+                  </div>
+                ))}
+            </div>
+
+            {addItemsCart.length > 0 && (
+              <>
+                <h3 className="text-sm text-muted fw-700 mb-1">Items to add</h3>
+                <div className="flex-col gap-sm mb-2">
+                  {addItemsCart.map(c => (
+                    <div key={c.id} className="flex items-center justify-between" style={{ padding: '.5rem .75rem', background: 'var(--bg)', borderRadius: 'var(--r-xl)' }}>
+                      <div>
+                        <p className="fw-700 text-sm">{c.name}</p>
+                        <p className="text-xs text-muted">₹{(c.price * c.qty).toFixed(0)}</p>
+                      </div>
+                      <div className="qty">
+                        <button className="qty__btn" onClick={() => changeAddItemsQty(c.id, -1)}><Minus size={14}/></button>
+                        <span className="qty__val">{c.qty}</span>
+                        <button className="qty__btn" onClick={() => changeAddItemsQty(c.id, 1)}><Plus size={14}/></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div className="flex gap-sm">
+              <button className="btn btn--outline flex-1" onClick={() => setAddItemsOrder(null)}>Cancel</button>
+              <button className="btn btn--primary flex-1" onClick={submitAddItemsToOrder} disabled={addItemsCart.length === 0}><Check size={16}/> Add to Order</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       {BillingModal()}

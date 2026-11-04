@@ -203,6 +203,11 @@ def create_menu_item(request):
         return Response({'error': 'Name and price are required.'},
                         status=status.HTTP_400_BAD_REQUEST)
 
+    # Prevent duplicate items based on name (case-insensitive)
+    if MenuItem.objects.filter(name__iexact=name).exists():
+        return Response({'error': 'An item with this name already exists.'},
+                        status=status.HTTP_400_BAD_REQUEST)
+
     # Validate that price is a valid number (can be int or float string from frontend)
     try:
         price = Decimal(str(price))
@@ -254,7 +259,12 @@ def edit_menu_item(request, pk):
 
     name = request.data.get('name')
     if name is not None:
-        item.name = name.strip()
+        name = name.strip()
+        # Prevent duplicate items based on name (case-insensitive) excluding current item
+        if MenuItem.objects.filter(name__iexact=name).exclude(pk=pk).exists():
+            return Response({'error': 'An item with this name already exists.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        item.name = name
 
     price = request.data.get('price')
     if price is not None:
@@ -289,6 +299,17 @@ def edit_menu_item(request, pk):
 
     item.save()
     return Response(MenuItemSerializer(item).data)
+
+
+@api_view(['DELETE'])
+def delete_menu_item(request, pk):
+    """Delete a menu item from the menu."""
+    try:
+        item = MenuItem.objects.get(pk=pk)
+    except MenuItem.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    item.delete()
+    return Response({'message': 'Item deleted.'}, status=status.HTTP_204_NO_CONTENT)
 
 # ============================================================
 #  ORDERS

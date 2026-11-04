@@ -19,6 +19,7 @@ urlpatterns = [
     path('menu/items/bulk/', views.bulk_toggle_menu),
     path('menu/items/create/', views.create_menu_item),
     path('menu/items/<int:pk>/edit/', views.edit_menu_item),
+    path('menu/items/<int:pk>/delete/', views.delete_menu_item),
 
     # Orders
     path('orders/', views.create_order),
