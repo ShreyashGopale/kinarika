@@ -12,6 +12,7 @@ import {
 
 import Dashboard from './Dashboard';
 import CustomersPage from './CustomersPage';
+import ErrorBoundary from './ErrorBoundary';
 
 // Helper: safely parse a number, returning 0 instead of NaN for invalid input
 const safeParseFloat = (val) => {
@@ -61,6 +62,8 @@ export default function App() {
   const [addTableModal, setAddTableModal] = useState(false);
   const [newTableName, setNewTableName] = useState('');
   const [billingOrder, setBillingOrder] = useState(null);
+  const [receiptOrder, setReceiptOrder] = useState(null);
+  const [completedOrders, setCompletedOrders] = useState([]);
   const [billingDiscount, setBillingDiscount] = useState('0');
   const [billingMethod, setBillingMethod] = useState('CASH');
   const [billingPhone, setBillingPhone] = useState('');
@@ -74,9 +77,34 @@ export default function App() {
 
   // --- add items to existing order modal ---
   const [addItemsOrder, setAddItemsOrder] = useState(null);
+  const openAddItemsToOrder = (order) => {
+    setAddItemsOrder(order);
+  };
   const [addItemsCart, setAddItemsCart] = useState([]);
   const [addItemsSearch, setAddItemsSearch] = useState('');
   const [addItemsVegOnly, setAddItemsVegOnly] = useState(false);
+
+  const addToAddItemsCart = (item) => {
+    setAddItemsCart(prev => {
+      const existing = prev.find(c => c.id === item.id);
+      if (existing) return prev.map(c => c.id === item.id ? { ...c, qty: c.qty + 1 } : c);
+      return [...prev, { id: item.id, name: item.name, price: parseFloat(item.price), qty: 1 }];
+    });
+  };
+
+  const changeAddItemsQty = (id, delta) => {
+    setAddItemsCart(prev => prev.map(c => c.id === id ? { ...c, qty: Math.max(1, c.qty + delta) } : c).filter(c => c.qty > 0));
+  };
+
+  const submitAddItemsToOrder = async () => {
+    if (!addItemsOrder || addItemsCart.length === 0) return;
+    try {
+      await api.post(`orders/${addItemsOrder.id}/add-items/`, { items: addItemsCart.map(c => ({ menu_item_id: c.id, quantity: c.qty })) });
+      setAddItemsOrder(null);
+      setAddItemsCart([]);
+      await refreshOrders();
+    } catch (err) { console.error(err); alert('Failed to add items'); }
+  };
 
   // --- set menu ---
   const [allMenuItems, setAllMenuItems] = useState([]);
@@ -1048,8 +1076,7 @@ export default function App() {
                   return (
                     <div key={item.id} className="flex justify-between items-center" style={{ padding: '.3rem 0', borderBottom: '1px solid var(--border)' }}>
                       <span className="text-sm">⭐ {item.name_snapshot} ×{item.quantity} <span className="text-xs text-muted">({item.item_type})</span></span>
-                      <button className={`btn btn--sm ${isFree ? 'btn--success' : 'btn--outline'}`}
-                        onClick={() => toggleFreeItem(item.id)}>
+                      <button className={`btn btn--sm ${isFree ? 'btn--success' : 'btn--outline'}`} onClick={() => toggleFreeItem(item.id)}>
                         {isFree ? 'Free ✓' : 'Make free'}
                       </button>
                     </div>
@@ -1366,7 +1393,8 @@ export default function App() {
   //  MAIN RENDER
   // ════════════════════════════════════════════════════════
   return (
-    <div className="app">
+    <ErrorBoundary>
+      <div className="app">
       {/* Toast */}
       {toast && <div className="toast"><div className="toast__inner"><Check size={15}/> {toast}</div></div>}
 
@@ -1500,5 +1528,6 @@ export default function App() {
       )}
 
     </div>
+    </ErrorBoundary>
   );
 }
