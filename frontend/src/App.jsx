@@ -70,6 +70,7 @@ export default function App() {
 
   // --- auth state ---
   const [loggedIn, setLoggedIn] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const [loginUser, setLoginUser] = useState('kinarika');
   const [loginPass, setLoginPass] = useState('weservehealthy');
 
@@ -188,7 +189,17 @@ export default function App() {
     if (cachedTables) setTables(cachedTables);
     if (cachedOrders) setActiveOrders(cachedOrders);
 
-    api.get('auth/session/').then(() => { setLoggedIn(true); loadEssential(); }).catch(() => {});
+    let cancelled = false;
+    api.get('auth/session/').then(() => {
+      if (cancelled) return;
+      setLoggedIn(true);
+      loadEssential();
+    }).catch(() => {
+      if (!cancelled) setLoggedIn(false);
+    }).finally(() => {
+      if (!cancelled) setAuthChecked(true);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // ── Browser history / back-button handling ────────────────
@@ -218,6 +229,36 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [showToast]);
+
+  // ── Multi-device sync: keep data fresh across devices ─────
+  useEffect(() => {
+    if (!loggedIn) return;
+    let inFlight = false;
+    const sync = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      try {
+        if (tab === 'history') {
+          await loadHistory();
+        } else if (tab === 'dashboard') {
+          await loadAll();
+        } else {
+          await loadEssential();
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    const onVis = () => { if (document.visibilityState === 'visible') sync(); };
+    const interval = setInterval(sync, 5000); // near-real-time polling
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', sync);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [loggedIn, tab]);
 
   // ── Auto-lookup loyalty when the billing phone is complete ──
   // Keeps the FREETHALI coupon's available-points display live.
@@ -689,6 +730,17 @@ export default function App() {
   // ════════════════════════════════════════════════════════
   //  RENDER – LOGIN
   // ════════════════════════════════════════════════════════
+  if (!authChecked) {
+    return (
+      <div className="login">
+        <div className="login__card" style={{ textAlign: 'center', padding: '2rem' }}>
+          <h1 className="login__title">HOTEL KINARIKA</h1>
+          <p className="login__sub">Checking session…</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!loggedIn) {
     return (
       <div className="login">

@@ -196,6 +196,11 @@ MAILERS = {
 
 AUTH_USER_MODEL = 'pos.User'
 
+# Sessions: keep users logged in across refreshes and make cookies work cross-site on Vercel
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+
 # Cross-domain session cookie settings
 if os.environ.get('VERCEL'):
     SESSION_COOKIE_SAMESITE = 'None'
