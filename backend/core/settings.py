@@ -21,12 +21,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-c9ln&&^bglcwfk=y_z4$rt#vo(upqg1(#strx)dk&+8!b_$d85')
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-change-me')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+_allowed_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS', '*')
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts.split(',') if h.strip()] or ['*']
 
 
 # Application definition
@@ -77,17 +78,16 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-import os
 # Use Supabase PostgreSQL on Vercel or when POSTGRES_DB is set; SQLite locally
 if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('POSTGRES_DB', 'postgres'),
-            'USER': os.environ.get('POSTGRES_USER', 'postgres.lrujygyuchccliabhfxg'),
-            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'OmkarWalunj@12345'), 
-            'HOST': os.environ.get('POSTGRES_HOST', 'aws-0-ap-south-1.pooler.supabase.com'),
-            'PORT': os.environ.get('POSTGRES_PORT', '6543'),
+            'USER': os.environ.get('POSTGRES_USER', 'postgres'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
         }
     }
 
@@ -99,11 +99,29 @@ else:
         }
     }
 
-# Allow frontend access
-cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS')
-if cors_origins:
-    CORS_ALLOWED_ORIGINS = cors_origins.split(',')
+# CORS / CSRF
+# Prefer explicit env configuration in deployed environments. If not provided,
+# allow common local-network dev origins and a known set of deployed origins.
+cors_origins_env = os.environ.get('CORS_ALLOWED_ORIGINS')
+csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS')
+
+_default_origins = [
+    'https://kinarika-lac.vercel.app',
+    'https://kinarika-jmkesh445-shreyash-gopale-personal.vercel.app',
+    'https://kinarika.vercel.app',
+    'https://kinarika-backend-cqsjcedp3-shreyash-gopale-personal.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:8000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:8000',
+]
+
+if cors_origins_env:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
 else:
+    CORS_ALLOWED_ORIGINS = _default_origins
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^http://192\.168\..*\..*:5173$",
         r"^http://10\..*\..*\..*:5173$",
@@ -111,12 +129,13 @@ else:
         r"^http://localhost:5173$",
         r"^http://127\.0\.0\.1:5173$",
         r"^http://localhost:5174$",
-        r"^http://127\.0\.0\.1:5174$"
+        r"^http://127\.0\.0\.1:5174$",
     ]
 
-csrf_origins = os.environ.get('CSRF_TRUSTED_ORIGINS')
-if csrf_origins:
-    CSRF_TRUSTED_ORIGINS = csrf_origins.split(',')
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS = [o.strip() for o in csrf_origins_env.split(',') if o.strip()]
+else:
+    CSRF_TRUSTED_ORIGINS = _default_origins
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -176,37 +195,6 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = 'pos.User'
-
-
-# Allow cross-device data transmission
-# NOTE: CORS_ALLOW_ALL_ORIGINS cannot be True when CORS_ALLOW_CREDENTIALS is True
-# (the ACAO header cannot be '*' with credentials). List explicit origins instead.
-CORS_ALLOWED_ORIGINS = [
-    'https://kinarika-lac.vercel.app',
-    'https://kinarika-jmkesh445-shreyash-gopale-personal.vercel.app',
-    'https://kinarika.vercel.app',
-    'https://kinarika-backend-cqsjcedp3-shreyash-gopale-personal.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:8000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:5174',
-    'http://127.0.0.1:8000',
-]
-
-# Trust the frontend domain for CSRF
-CSRF_TRUSTED_ORIGINS = [
-    'https://kinarika-lac.vercel.app',
-    'https://kinarika-jmkesh445-shreyash-gopale-personal.vercel.app',
-    'https://kinarika.vercel.app',
-    'https://kinarika-backend-cqsjcedp3-shreyash-gopale-personal.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:8000',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:5174',
-    'http://127.0.0.1:8000',
-]
 
 # Cross-domain session cookie settings
 if os.environ.get('VERCEL'):

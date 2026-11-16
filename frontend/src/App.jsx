@@ -103,7 +103,7 @@ export default function App() {
       setAddItemsOrder(null);
       setAddItemsCart([]);
       await refreshOrders();
-    } catch (err) { console.error(err); alert('Failed to add items'); }
+    } catch (err) { console.error(err); alert(getApiError(err, 'Failed to add items')); }
   };
 
   // --- set menu ---
@@ -185,8 +185,10 @@ export default function App() {
       loadAll();
       showToast('Welcome back!');
     } catch (err) {
-      const msg = err.response?.data?.error || (err.response ? 'Invalid credentials' : 'Cannot connect to backend server. Please verify backend is running.');
-      alert(msg);
+      const fallback = err?.response
+        ? 'Invalid credentials'
+        : 'Cannot connect to backend server. Please verify backend is running.';
+      alert(getApiError(err, fallback));
     }
   };
 
@@ -237,7 +239,7 @@ export default function App() {
       const [dashR, expR] = await Promise.all([api.get('dashboard/'), api.get('inventory/')]);
       setDashStats(dashR.data); setExpenses(expR.data);
       showToast('Expense added');
-    } catch (err) { alert('Failed to add expense'); }
+    } catch (err) { alert(getApiError(err, 'Failed to add expense')); }
   };
 
   // ── Set Menu ──────────────────────────────────────────────
@@ -302,7 +304,7 @@ export default function App() {
       setAddItemModal(false);
       showToast('New dish added!');
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to add item');
+      alert(getApiError(err, 'Failed to add item'));
     }
   };
 
@@ -326,7 +328,7 @@ export default function App() {
       setMenuItems(activeRes.data);
       setEditItemModal(false);
       showToast('Dish updated!');
-    } catch (err) { alert(err.response?.data?.error || 'Failed to update dish'); }
+    } catch (err) { alert(getApiError(err, 'Failed to update dish')); }
   };
 
   const deleteMenuItem = async (itemId) => {
@@ -337,7 +339,7 @@ export default function App() {
       setMenuItems(prev => prev.filter(i => i.id !== itemId));
       showToast('Item deleted');
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to delete item');
+      alert(getApiError(err, 'Failed to delete item'));
     }
   };
 
@@ -349,7 +351,7 @@ export default function App() {
       setNewTableName(''); setAddTableModal(false);
       refreshTables();
       showToast(`${name} added`);
-    } catch (err) { alert(err.response?.data?.error || 'Error'); }
+    } catch (err) { alert(getApiError(err, 'Error')); }
   };
 
   const deleteTable = async (id, e) => {
@@ -359,7 +361,7 @@ export default function App() {
       await api.delete(`tables/${id}/`);
       refreshTables();
       showToast('Table removed');
-    } catch (err) { alert(err.response?.data?.error || 'Cannot delete'); }
+    } catch (err) { alert(getApiError(err, 'Cannot delete')); }
   };
 
   const openTableOrder = (table) => {
@@ -425,7 +427,7 @@ export default function App() {
       showToast('Order placed!');
     } catch (err) {
       console.error(err);
-      alert('Failed to place order');
+      alert(getApiError(err, 'Failed to place order'));
     }
   };
 
@@ -515,7 +517,7 @@ export default function App() {
           nonveg_paid_count: loyalty.nonveg_paid_count,
         });
       }
-    } catch (err) { alert(err.response?.data?.error || 'Billing error'); }
+    } catch (err) { alert(getApiError(err, 'Billing error')); }
   };
 
   // ── History ────────────────────────────────────────────────
@@ -1002,7 +1004,7 @@ export default function App() {
                         await refreshOrders();
                         await refreshTables();
                         showToast('Order deleted');
-                      } catch (err) { alert('Failed to delete order'); }
+                      } catch (err) { alert(getApiError(err, 'Failed to delete order')); }
                     }}>
                       <Trash2 size={14}/>
                     </button>

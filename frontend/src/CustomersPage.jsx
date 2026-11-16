@@ -34,9 +34,17 @@ export default function CustomersPage() {
     } catch (err) {
       setData(null);
       setSearched(true);
-      setError(err.response?.status === 404
-        ? 'No customer found with this number'
-        : 'Failed to load customer');
+      if (err.response?.status === 404) {
+        setError('No customer found with this number');
+      } else {
+        const d = err?.response?.data;
+        const msg =
+          (typeof d?.error === 'string' && d.error) ||
+          (typeof d?.detail === 'string' && d.detail) ||
+          (typeof d === 'string' && d) ||
+          'Failed to load customer';
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
