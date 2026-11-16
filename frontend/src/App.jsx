@@ -24,11 +24,50 @@ const safeParseInt = (val) => {
   return isNaN(n) ? 0 : n;
 };
 
+const getApiError = (err, fallback = 'Something went wrong') => {
+  const d = err?.response?.data;
+  if (typeof d === 'string' && d.trim()) return d;
+  if (d && typeof d === 'object') {
+    if (typeof d.error === 'string' && d.error) return d.error;
+    if (typeof d.detail === 'string' && d.detail) return d.detail;
+    if (typeof d.message === 'string' && d.message) return d.message;
+    try {
+      const parts = Object.values(d)
+        .flat()
+        .map(v => (typeof v === 'string' ? v : (v && typeof v === 'object' ? JSON.stringify(v) : String(v))))
+        .filter(Boolean);
+      if (parts.length) return parts.join(', ');
+    } catch (_) {}
+  }
+  if (err?.response?.status) return `${fallback} (${err.response.status})`;
+  if (err?.message) return err.message;
+  return fallback;
+};
+
 // ════════════════════════════════════════════════════════════
 //  MAIN APP
 // ════════════════════════════════════════════════════════════
 
 export default function App() {
+  // --- simple session cache (per device/session) to reduce refetching ---
+  const CACHE_TTL = 5 * 60 * 1000;
+  const cacheGet = (key, maxAge = CACHE_TTL) => {
+    try {
+      const raw = sessionStorage.getItem(`kinarika:${key}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.ts !== 'number') return null;
+      if (Date.now() - parsed.ts > maxAge) return null;
+      return parsed.data;
+    } catch { return null; }
+  };
+  const cacheSet = (key, data) => {
+    try { sessionStorage.setItem(`kinarika:${key}`, JSON.stringify({ ts: Date.now(), data })); } catch {}
+  };
+  const cacheClear = (...keys) => {
+    try { keys.forEach(k => sessionStorage.removeItem(`kinarika:${k}`)); } catch {}
+  };
+
   // --- auth state ---
   const [loggedIn, setLoggedIn] = useState(false);
   const [loginUser, setLoginUser] = useState('kinarika');
@@ -102,7 +141,7 @@ export default function App() {
       await api.post(`orders/${addItemsOrder.id}/add-items/`, { items: addItemsCart.map(c => ({ menu_item_id: c.id, quantity: c.qty })) });
       setAddItemsOrder(null);
       setAddItemsCart([]);
-      await refreshOrders();
+      await Promise.all([refreshOrders(), refreshTables()]);
     } catch (err) { console.error(err); alert(getApiError(err, 'Failed to add items')); }
   };
 
@@ -131,9 +170,25 @@ export default function App() {
   const [toast, setToast] = useState('');
   const showToast = useCallback((msg) => { setToast(msg); setTimeout(() => setToast(''), 2200); }, []);
 
+  const categoryById = useMemo(() => {
+    const m = new Map();
+    (categories || []).forEach(c => m.set(c.id, c));
+    return m;
+  }, [categories]);
+
   // ── Auth ──────────────────────────────────────────────────
   useEffect(() => {
-    api.get('auth/session/').then(() => { setLoggedIn(true); loadAll(); }).catch(() => {});
+    // hydrate from session cache for instant UI, then revalidate
+    const cachedCats = cacheGet('categories', 30 * 60 * 1000);
+    const cachedMenu = cacheGet('menu_items', 30 * 60 * 1000);
+    const cachedTables = cacheGet('tables', 60 * 1000);
+    const cachedOrders = cacheGet('active_orders', 30 * 1000);
+    if (cachedCats) setCategories(cachedCats);
+    if (cachedMenu) setMenuItems(cachedMenu);
+    if (cachedTables) setTables(cachedTables);
+    if (cachedOrders) setActiveOrders(cachedOrders);
+
+    api.get('auth/session/').then(() => { setLoggedIn(true); loadEssential(); }).catch(() => {});
   }, []);
 
   // ── Browser history / back-button handling ────────────────
@@ -182,8 +237,8 @@ export default function App() {
     try {
       await api.post('auth/login/', { username: (loginUser || '').trim(), password: (loginPass || '').trim() });
       setLoggedIn(true);
-      loadAll();
       showToast('Welcome back!');
+      loadEssential();
     } catch (err) {
       const fallback = err?.response
         ? 'Invalid credentials'
@@ -193,12 +248,43 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await api.post('auth/logout/');
+    try { await api.post('auth/logout/'); } catch {}
     setLoggedIn(false);
     setLoginUser(''); setLoginPass('');
+    cacheClear('categories', 'menu_items', 'menu_items_all', 'tables', 'active_orders', 'completed_orders_today');
   };
 
   // ── Data loading ──────────────────────────────────────────
+  const loadEssential = async () => {
+    try {
+      const results = await Promise.allSettled([
+        api.get('menu/categories/'),
+        api.get('menu/items/'),
+        api.get('tables/'),
+        api.get('orders/active/'),
+      ]);
+      const [catR, itemR, tableR, orderR] = results;
+      if (catR.status === 'fulfilled' && catR.value?.data) {
+        setCategories(catR.value.data);
+        cacheSet('categories', catR.value.data);
+        setActiveCat(prev => prev || (catR.value.data[0]?.name || ''));
+      }
+      if (itemR.status === 'fulfilled' && itemR.value?.data) {
+        setMenuItems(itemR.value.data);
+        cacheSet('menu_items', itemR.value.data);
+      }
+      if (tableR.status === 'fulfilled' && tableR.value?.data) {
+        setTables(tableR.value.data);
+        cacheSet('tables', tableR.value.data);
+      }
+      if (orderR.status === 'fulfilled' && orderR.value?.data) {
+        setActiveOrders(orderR.value.data);
+        cacheSet('active_orders', orderR.value.data);
+      }
+    } catch (err) { console.error(err); }
+  };
+
+  // Full refresh including dashboard/inventory (used by dashboard/expenses tab)
   const loadAll = async () => {
     try {
       const results = await Promise.allSettled([
@@ -212,20 +298,43 @@ export default function App() {
       const [catR, itemR, tableR, orderR, dashR, expR] = results;
       if (catR.status === 'fulfilled' && catR.value?.data) {
         setCategories(catR.value.data);
-        if (catR.value.data.length > 0 && !activeCat) setActiveCat(catR.value.data[0].name);
+        cacheSet('categories', catR.value.data);
+        setActiveCat(prev => prev || (catR.value.data[0]?.name || ''));
       }
-      if (itemR.status === 'fulfilled' && itemR.value?.data) setMenuItems(itemR.value.data);
-      if (tableR.status === 'fulfilled' && tableR.value?.data) setTables(tableR.value.data);
-      if (orderR.status === 'fulfilled' && orderR.value?.data) setActiveOrders(orderR.value.data);
+      if (itemR.status === 'fulfilled' && itemR.value?.data) {
+        setMenuItems(itemR.value.data);
+        cacheSet('menu_items', itemR.value.data);
+      }
+      if (tableR.status === 'fulfilled' && tableR.value?.data) {
+        setTables(tableR.value.data);
+        cacheSet('tables', tableR.value.data);
+      }
+      if (orderR.status === 'fulfilled' && orderR.value?.data) {
+        setActiveOrders(orderR.value.data);
+        cacheSet('active_orders', orderR.value.data);
+      }
       if (dashR.status === 'fulfilled' && dashR.value?.data) setDashStats(dashR.value.data);
       if (expR.status === 'fulfilled' && expR.value?.data) setExpenses(expR.value.data);
     } catch (err) { console.error(err); }
   };
 
-  const refreshTables = async () => { const r = await api.get('tables/'); setTables(r.data); };
-  const refreshOrders = async () => {
-    const [o, d] = await Promise.all([api.get('orders/active/'), api.get('dashboard/')]);
-    setActiveOrders(o.data); setDashStats(d.data);
+  const refreshTables = async () => {
+    try {
+      const r = await api.get('tables/');
+      setTables(r.data);
+      cacheSet('tables', r.data);
+    } catch {}
+  };
+  const refreshOrders = async (opts = {}) => {
+    const { includeDashboard = false } = opts;
+    try {
+      const reqs = [api.get('orders/active/')];
+      if (includeDashboard) reqs.push(api.get('dashboard/'));
+      const [o, d] = await Promise.all(reqs);
+      setActiveOrders(o.data);
+      cacheSet('active_orders', o.data);
+      if (d?.data) setDashStats(d.data);
+    } catch {}
   };
 
    const addExpense = async () => {
@@ -244,24 +353,40 @@ export default function App() {
 
   // ── Set Menu ──────────────────────────────────────────────
   const openSetMenu = async () => {
+    setTab('setmenu');
+    setSetMenuSearch('');
+    if (allMenuItems.length === 0) {
+      const cachedAll = cacheGet('menu_items_all', 30 * 60 * 1000);
+      if (cachedAll) setAllMenuItems(cachedAll);
+    }
     try {
       const res = await api.get('menu/items/all/');
       setAllMenuItems(res.data);
-      setSetMenuSearch('');
-      setTab('setmenu');
+      cacheSet('menu_items_all', res.data);
     } catch (err) { console.error(err); }
   };
 
   const toggleItem = async (itemId) => {
     try {
       const res = await api.patch(`menu/items/${itemId}/toggle/`);
+      const updated = res.data;
       // Update local state so the toggle is instant
-      setAllMenuItems(prev =>
-        prev.map(i => i.id === itemId ? { ...i, is_active: res.data.is_active } : i)
-      );
-      // Also refresh the active menu items used for ordering
-      const activeRes = await api.get('menu/items/');
-      setMenuItems(activeRes.data);
+      setAllMenuItems(prev => {
+        const next = prev.map(i => i.id === itemId ? { ...i, is_active: updated.is_active } : i);
+        cacheSet('menu_items_all', next);
+        return next;
+      });
+      setMenuItems(prev => {
+        let next;
+        if (updated.is_active) {
+          const exists = prev.some(i => i.id === updated.id);
+          next = exists ? prev.map(i => i.id === updated.id ? updated : i) : [...prev, updated];
+        } else {
+          next = prev.filter(i => i.id !== updated.id);
+        }
+        cacheSet('menu_items', next);
+        return next;
+      });
     } catch (err) { console.error(err); }
   };
 
@@ -288,17 +413,17 @@ export default function App() {
       } else {
         payload.category_name = newItem.category_name.trim();
       }
-      await api.post('menu/items/create/', payload);
+      const res = await api.post('menu/items/create/', payload);
+      const created = res.data;
 
-      // Refresh both lists
-      const [allRes, activeRes, catRes] = await Promise.all([
-        api.get('menu/items/all/'),
-        api.get('menu/items/'),
-        api.get('menu/categories/'),
-      ]);
-      setAllMenuItems(allRes.data);
-      setMenuItems(activeRes.data);
-      setCategories(catRes.data);
+      setAllMenuItems(prev => { const next = [...prev, created]; cacheSet('menu_items_all', next); return next; });
+      if (created.is_active) {
+        setMenuItems(prev => { const next = [...prev, created]; cacheSet('menu_items', next); return next; });
+      }
+      // refresh categories only if a new one may have been created
+      if (payload.category_name) {
+        api.get('menu/categories/').then(catRes => { setCategories(catRes.data); cacheSet('categories', catRes.data); }).catch(() => {});
+      }
 
       setNewItem({ name: '', price: '', item_type: 'veg', category_id: '', category_name: '', is_loyalty_eligible: false });
       setAddItemModal(false);
@@ -323,9 +448,19 @@ export default function App() {
         is_loyalty_eligible: editItemState.is_loyalty_eligible
       };
       const res = await api.patch(`menu/items/${editItemState.id}/edit/`, payload);
-      setAllMenuItems(prev => prev.map(i => i.id === editItemState.id ? res.data : i));
-      const activeRes = await api.get('menu/items/');
-      setMenuItems(activeRes.data);
+      const updated = res.data;
+      setAllMenuItems(prev => { const next = prev.map(i => i.id === updated.id ? updated : i); cacheSet('menu_items_all', next); return next; });
+      setMenuItems(prev => {
+        let next;
+        if (updated.is_active) {
+          const exists = prev.some(i => i.id === updated.id);
+          next = exists ? prev.map(i => i.id === updated.id ? updated : i) : [...prev, updated];
+        } else {
+          next = prev.filter(i => i.id !== updated.id);
+        }
+        cacheSet('menu_items', next);
+        return next;
+      });
       setEditItemModal(false);
       showToast('Dish updated!');
     } catch (err) { alert(getApiError(err, 'Failed to update dish')); }
@@ -335,8 +470,8 @@ export default function App() {
     if (!confirm('Delete this item from the menu? This cannot be undone.')) return;
     try {
       await api.delete(`menu/items/${itemId}/delete/`);
-      setAllMenuItems(prev => prev.filter(i => i.id !== itemId));
-      setMenuItems(prev => prev.filter(i => i.id !== itemId));
+      setAllMenuItems(prev => { const next = prev.filter(i => i.id !== itemId); cacheSet('menu_items_all', next); return next; });
+      setMenuItems(prev => { const next = prev.filter(i => i.id !== itemId); cacheSet('menu_items', next); return next; });
       showToast('Item deleted');
     } catch (err) {
       alert(getApiError(err, 'Failed to delete item'));
@@ -359,7 +494,7 @@ export default function App() {
     if (!confirm('Delete this table?')) return;
     try {
       await api.delete(`tables/${id}/`);
-      refreshTables();
+      setTables(prev => { const next = prev.filter(t => t.id !== id); cacheSet('tables', next); return next; });
       showToast('Table removed');
     } catch (err) { alert(getApiError(err, 'Cannot delete')); }
   };
@@ -421,10 +556,9 @@ export default function App() {
 
       setCart([]);
       setOrderContext(null);
-      await refreshOrders();
-      await refreshTables();
       setTab('orders');
       showToast('Order placed!');
+      await Promise.all([refreshOrders(), refreshTables()]);
     } catch (err) {
       console.error(err);
       alert(getApiError(err, 'Failed to place order'));
@@ -494,37 +628,31 @@ export default function App() {
         phone_number: billingPhone.trim(),
         free_item_ids: couponApplied ? freeItemIds : [],
       });
-      const completedRes = await api.get(`orders/${billingOrder.id}/`);
-      setReceiptOrder(completedRes.data);
+      const completedOrder = (res.data && res.data.id) ? res.data : (await api.get(`orders/${billingOrder.id}/`)).data;
+      setReceiptOrder(completedOrder);
       setBillingOrder(null);
-      await refreshOrders();
-      await refreshTables();
-      // Feedback on loyalty + WhatsApp auto-send
-      const loyalty = res.data?.loyalty;
-      const whatsapp = res.data?.whatsapp;
-      if (whatsapp?.sent) {
-        showToast('Bill completed ✓ · WhatsApp sent');
-      } else if (whatsapp && !whatsapp.sent) {
-        showToast('Bill completed ✓');
-      } else {
-        showToast('Bill completed ✓');
-      }
-      if (loyalty) {
+      setTab('orders');
+      showToast(res.data?.whatsapp?.sent ? 'Bill completed ✓ · WhatsApp sent' : 'Bill completed ✓');
+      if (res.data?.loyalty) {
         setBillingLoyalty({
-          free_veg_balance: loyalty.free_veg_balance,
-          free_nonveg_balance: loyalty.free_nonveg_balance,
-          veg_paid_count: loyalty.veg_paid_count,
-          nonveg_paid_count: loyalty.nonveg_paid_count,
+          free_veg_balance: res.data.loyalty.free_veg_balance,
+          free_nonveg_balance: res.data.loyalty.free_nonveg_balance,
+          veg_paid_count: res.data.loyalty.veg_paid_count,
+          nonveg_paid_count: res.data.loyalty.nonveg_paid_count,
         });
       }
+      await Promise.all([refreshOrders(), refreshTables()]);
     } catch (err) { alert(getApiError(err, 'Billing error')); }
   };
 
   // ── History ────────────────────────────────────────────────
   const loadHistory = async () => {
+    const cached = cacheGet('completed_orders_today', 60 * 1000);
+    if (cached && completedOrders.length === 0) setCompletedOrders(cached);
     try {
       const res = await api.get('orders/completed/');
       setCompletedOrders(res.data);
+      cacheSet('completed_orders_today', res.data);
     } catch (err) { console.error(err); }
   };
 
@@ -533,9 +661,10 @@ export default function App() {
   const debouncedSetMenuSearch = useDebounce(setMenuSearch, 250);
 
   const filtered = useMemo(() => {
+    const q = (debouncedSearch || '').toLowerCase();
     return menuItems.filter(i => {
       if (vegOnly && i.item_type !== 'veg') return false;
-      if (debouncedSearch && !i.name.toLowerCase().includes(debouncedSearch.toLowerCase())) return false;
+      if (q && !i.name.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [menuItems, debouncedSearch, vegOnly]);
@@ -543,20 +672,19 @@ export default function App() {
   const visibleCats = useMemo(() => {
     const set = new Set();
     filtered.forEach(i => {
-      const c = categories.find(cat => cat.id === i.category);
+      const c = categoryById.get(i.category);
       if (c) set.add(c.name);
     });
     return [...set];
-  }, [filtered, categories]);
+  }, [filtered, categoryById]);
 
-  const shownItems = (debouncedSearch || vegOnly)
-    ? filtered
-    : activeCat === ''
-      ? filtered
-      : filtered.filter(i => {
-          const c = categories.find(cat => cat.id === i.category);
-          return c && c.name === activeCat;
-        });
+  const shownItems = useMemo(() => {
+    if (debouncedSearch || vegOnly || activeCat === '') return filtered;
+    return filtered.filter(i => {
+      const c = categoryById.get(i.category);
+      return c && c.name === activeCat;
+    });
+  }, [filtered, debouncedSearch, vegOnly, activeCat, categoryById]);
 
   // ════════════════════════════════════════════════════════
   //  RENDER – LOGIN
@@ -647,31 +775,32 @@ export default function App() {
   // ("Rendered more hooks than during the previous render" → blank screen).
   // The debounced search value is therefore computed once at App level.
   const SetMenuPage = () => {
-    const filtered = allMenuItems.filter(i => {
+    const q = (debouncedSetMenuSearch || '').toLowerCase();
+    const filteredSet = allMenuItems.filter(i => {
       if (setMenuVegOnly && i.item_type !== 'veg') return false;
-      if (debouncedSetMenuSearch && !i.name.toLowerCase().includes(debouncedSetMenuSearch.toLowerCase())) return false;
+      if (q && !i.name.toLowerCase().includes(q)) return false;
       return true;
     });
 
-    const visibleCats = [...new Set(filtered.map(i => {
-      const c = categories.find(cat => cat.id === i.category);
+    const visibleSetCats = [...new Set(filteredSet.map(i => {
+      const c = categoryById.get(i.category);
       return c ? c.name : 'Other';
     }))];
 
-    const shownItems = (debouncedSetMenuSearch || setMenuVegOnly)
-      ? filtered
+    const shownSetItems = (q || setMenuVegOnly)
+      ? filteredSet
       : setMenuActiveCat === ''
-        ? filtered
-        : filtered.filter(i => {
-            const c = categories.find(cat => cat.id === i.category);
+        ? filteredSet
+        : filteredSet.filter(i => {
+            const c = categoryById.get(i.category);
             const catName = c ? c.name : 'Other';
             return catName === setMenuActiveCat;
           });
 
     // Group items by category for rendering
     const grouped = {};
-    shownItems.forEach(item => {
-      const cat = categories.find(c => c.id === item.category);
+    shownSetItems.forEach(item => {
+      const cat = categoryById.get(item.category);
       const catName = cat ? cat.name : 'Other';
       if (!grouped[catName]) grouped[catName] = [];
       grouped[catName].push(item);
@@ -704,10 +833,10 @@ export default function App() {
             {setMenuSearch && <button style={{ position:'absolute', right:'.6rem', top:'50%', transform:'translateY(-50%)', background:'none', border:'none', color:'var(--text-light)', cursor:'pointer' }} onClick={() => setSetMenuSearch('')}><X size={15}/></button>}
           </div>
 
-          {!setMenuSearch && !setMenuVegOnly && visibleCats.length > 0 && (
+          {!setMenuSearch && !setMenuVegOnly && visibleSetCats.length > 0 && (
             <div className="cat-tabs">
               <button className={`cat-tab ${setMenuActiveCat === '' ? 'active' : ''}`} onClick={() => setSetMenuActiveCat('')}>Full Menu</button>
-              {visibleCats.map(c => (
+              {visibleSetCats.map(c => (
                 <button key={c} className={`cat-tab ${setMenuActiveCat === c ? 'active' : ''}`} onClick={() => setSetMenuActiveCat(c)}>{c}</button>
               ))}
             </div>
@@ -1001,8 +1130,7 @@ export default function App() {
                       if (!confirm('Delete this order?')) return;
                       try {
                         await api.delete(`orders/${order.id}/`);
-                        await refreshOrders();
-                        await refreshTables();
+                        await Promise.all([refreshOrders(), refreshTables()]);
                         showToast('Order deleted');
                       } catch (err) { alert(getApiError(err, 'Failed to delete order')); }
                     }}>
@@ -1422,7 +1550,11 @@ export default function App() {
             ['dashboard', Banknote, 'Expenses'],
             ['customers', Users, 'Customers'],
           ].map(([key, Icon, label]) => (
-            <button key={key} className={`nav-btn ${tab === key ? 'active' : ''}`} onClick={() => { setTab(key); if (key === 'history') loadHistory(); }}>
+            <button key={key} className={`nav-btn ${tab === key ? 'active' : ''}`} onClick={() => {
+              setTab(key);
+              if (key === 'history') loadHistory();
+              if (key === 'dashboard') loadAll();
+            }}>
               <span style={{ position: 'relative' }}>
                 <Icon className="nav-btn__icon" size={20}/>
                 {key === 'orders' && activeOrders.length > 0 && <span className="badge">{activeOrders.length}</span>}

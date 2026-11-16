@@ -82,21 +82,27 @@ def api_session(request):
 def tables_list(request):
     if request.method == 'GET':
         tables = Table.objects.all().order_by('id')
+        active_orders = (
+            Order.objects
+            .filter(status__in=['NEW', 'PREPARING', 'READY'], table_name__isnull=False)
+            .exclude(table_name='')
+            .order_by('-created_at')
+            .values('id', 'status', 'table_name')
+        )
+        active_by_table = {}
+        for o in active_orders:
+            # keep newest active order per table
+            active_by_table.setdefault(o['table_name'], o)
         data = []
         for table in tables:
-            # Find any active order sitting on this table
-            active = Order.objects.filter(
-                table_name=table.name,
-                status__in=['NEW', 'PREPARING', 'READY']
-            ).first()
-            table_info = {
+            active = active_by_table.get(table.name)
+            data.append({
                 'id': table.id,
                 'name': table.name,
                 'has_active_order': active is not None,
-                'active_order_id': active.id if active else None,
-                'active_order_status': active.status if active else None,
-            }
-            data.append(table_info)
+                'active_order_id': active['id'] if active else None,
+                'active_order_status': active['status'] if active else None,
+            })
         return Response(data)
 
     # POST  –  create a new table
@@ -149,14 +155,14 @@ def menu_categories(request):
 
 @api_view(['GET'])
 def menu_items(request):
-    items = MenuItem.objects.filter(is_active=True).order_by('category__id', 'name')
+    items = MenuItem.objects.filter(is_active=True).select_related('category').order_by('category__id', 'name')
     return Response(MenuItemSerializer(items, many=True).data)
 
 
 @api_view(['GET'])
 def menu_items_all(request):
     """Return ALL items (active + inactive) for the Set Menu page."""
-    items = MenuItem.objects.all().order_by('category__id', 'name')
+    items = MenuItem.objects.all().select_related('category').order_by('category__id', 'name')
     return Response(MenuItemSerializer(items, many=True).data)
 
 
@@ -396,7 +402,15 @@ def add_items_to_order(request, pk):
 def order_detail(request, pk):
     """Get full detail of a single order, or delete it."""
     try:
-        order = Order.objects.get(pk=pk)
+        if request.method == 'GET':
+            order = (
+                Order.objects
+                .select_related('customer', 'payment')
+                .prefetch_related('items__menu_item')
+                .get(pk=pk)
+            )
+        else:
+            order = Order.objects.get(pk=pk)
     except Order.DoesNotExist:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -460,7 +474,13 @@ def update_order_status(request, pk):
 @api_view(['GET'])
 def active_orders(request):
     """All orders that are not COMPLETED, newest first."""
-    orders = Order.objects.exclude(status='COMPLETED').order_by('-created_at')
+    orders = (
+        Order.objects
+        .exclude(status='COMPLETED')
+        .select_related('customer', 'payment')
+        .prefetch_related('items__menu_item')
+        .order_by('-created_at')
+    )
     return Response(OrderSerializer(orders, many=True).data)
 
 
@@ -468,10 +488,13 @@ def active_orders(request):
 def completed_orders(request):
     """Completed orders for today (bill history)."""
     today = timezone.now().date()
-    orders = Order.objects.filter(
-        status='COMPLETED',
-        completed_at__date=today
-    ).order_by('-completed_at')
+    orders = (
+        Order.objects
+        .filter(status='COMPLETED', completed_at__date=today)
+        .select_related('customer', 'payment')
+        .prefetch_related('items__menu_item')
+        .order_by('-completed_at')
+    )
     return Response(OrderSerializer(orders, many=True).data)
 
 
@@ -510,16 +533,53 @@ def customer_detail(request, phone):
 
     loyalty, _ = LoyaltyAccount.objects.get_or_create(customer=customer)
 
-    orders = Order.objects.filter(
-        customer=customer, status='COMPLETED'
-    ).order_by('-completed_at')
+    orders = (
+        Order.objects
+        .filter(customer=customer, status='COMPLETED')
+        .select_related('payment')
+        .prefetch_related('items__menu_item')
+        .order_by('-completed_at')
+    )
 
     order_data = []
+    history = []
     for o in orders:
         try:
             payment = PaymentSerializer(o.payment).data
         except Exception:
             payment = None
+        items_data = []
+        for it in o.items.all():
+            mi = it.menu_item
+            item_type = mi.item_type if mi else 'unknown'
+            eligible = bool(mi.is_loyalty_eligible) if mi else False
+            items_data.append({
+                'name_snapshot': it.name_snapshot,
+                'price_snapshot': float(it.price_snapshot),
+                'quantity': it.quantity,
+                'item_type': item_type,
+                'is_loyalty_eligible': eligible,
+                'is_free_redemption': bool(it.is_free_redemption),
+            })
+            if mi and eligible:
+                if it.is_free_redemption:
+                    history.append({
+                        'type': item_type,
+                        'dish': it.name_snapshot,
+                        'date': o.completed_at.isoformat() if o.completed_at else None,
+                        'quantity': it.quantity,
+                        'action': 'redeemed',
+                        'points': -10 * it.quantity,
+                    })
+                else:
+                    history.append({
+                        'type': item_type,
+                        'dish': it.name_snapshot,
+                        'date': o.completed_at.isoformat() if o.completed_at else None,
+                        'quantity': it.quantity,
+                        'action': 'earned',
+                        'points': it.quantity,
+                    })
         order_data.append({
             'id': o.id,
             'order_number': o.order_number,
@@ -530,44 +590,9 @@ def customer_detail(request, phone):
             'free_thali_adjustment': float(o.free_thali_adjustment),
             'completed_at': o.completed_at.isoformat() if o.completed_at else None,
             'payment': payment,
-            'items': [
-                {
-                    'name_snapshot': it.name_snapshot,
-                    'price_snapshot': float(it.price_snapshot),
-                    'quantity': it.quantity,
-                    'item_type': it.menu_item.item_type if it.menu_item else 'unknown',
-                    'is_loyalty_eligible': bool(it.menu_item.is_loyalty_eligible) if it.menu_item else False,
-                    'is_free_redemption': bool(it.is_free_redemption),
-                }
-                for it in o.items.select_related('menu_item').all()
-            ],
+            'items': items_data,
         })
 
-    # Loyalty history: earned points come from loyalty-eligible items
-    # that were paid for; redeemed points from items flagged as free.
-    history = []
-    for o in orders:
-        for it in o.items.select_related('menu_item').all():
-            if not it.menu_item or not it.menu_item.is_loyalty_eligible:
-                continue
-            if it.is_free_redemption:
-                history.append({
-                    'type': it.menu_item.item_type,
-                    'dish': it.name_snapshot,
-                    'date': o.completed_at.isoformat() if o.completed_at else None,
-                    'quantity': it.quantity,
-                    'action': 'redeemed',
-                    'points': -10 * it.quantity,
-                })
-            else:
-                history.append({
-                    'type': it.menu_item.item_type,
-                    'dish': it.name_snapshot,
-                    'date': o.completed_at.isoformat() if o.completed_at else None,
-                    'quantity': it.quantity,
-                    'action': 'earned',
-                    'points': it.quantity,
-                })
     history.sort(key=lambda h: h['date'] or '', reverse=True)
 
     return Response({
@@ -762,7 +787,7 @@ def complete_bill(request, pk):
         )
 
         # Track dish sales for reporting
-        for item in order.items.all():
+        for item in items:
             DishSale.objects.create(
                 order_reference=order.order_number,
                 dish_name=item.name_snapshot,
@@ -800,6 +825,14 @@ def complete_bill(request, pk):
                 loyalty.free_nonveg_balance += earned
                 loyalty.nonveg_paid_count %= 10
             loyalty.save()
+
+    # Reload with related data for response/receipt
+    order = (
+        Order.objects
+        .select_related('customer', 'payment')
+        .prefetch_related('items__menu_item')
+        .get(pk=order.id)
+    )
 
     # Auto-send the receipt via WhatsApp (outside the transaction so a
     # failed send never rolls back the completed bill).
@@ -929,30 +962,37 @@ def send_order_whatsapp(request, pk):
 def dashboard_stats(request):
     from datetime import datetime, timedelta
     from django.db.models import Sum, Count, F
-    
+    from django.db.models.functions import TruncDate
+
     # 1. Today's Stats
     today = timezone.now().date()
     yesterday = today - timedelta(days=1)
-    
-    today_orders = Order.objects.filter(status='COMPLETED', completed_at__date=today)
-    yesterday_orders = Order.objects.filter(status='COMPLETED', completed_at__date=yesterday)
-    
+
+    completed_qs = Order.objects.filter(status='COMPLETED')
+    today_orders = completed_qs.filter(completed_at__date=today)
+    yesterday_orders = completed_qs.filter(completed_at__date=yesterday)
+
     today_revenue = today_orders.aggregate(t=Sum('final_total'))['t'] or 0
     yesterday_revenue = yesterday_orders.aggregate(t=Sum('final_total'))['t'] or 0
-    
+
     trend = 0
     if yesterday_revenue > 0:
         trend = ((float(today_revenue) - float(yesterday_revenue)) / float(yesterday_revenue)) * 100
-        
-    today_upi = Payment.objects.filter(order__in=today_orders, method__in=['UPI', 'CARD']).aggregate(t=Sum('amount'))['t'] or 0
-    today_cash = Payment.objects.filter(order__in=today_orders, method='CASH').aggregate(t=Sum('amount'))['t'] or 0
-    
-    today_upi_count = Payment.objects.filter(order__in=today_orders, method__in=['UPI', 'CARD']).count()
-    today_cash_count = Payment.objects.filter(order__in=today_orders, method='CASH').count()
-    
+
+    today_pay = Payment.objects.filter(order__in=today_orders).aggregate(
+        upi=Sum('amount', filter=models.Q(method__in=['UPI', 'CARD'])),
+        cash=Sum('amount', filter=models.Q(method='CASH')),
+        upi_count=Count('id', filter=models.Q(method__in=['UPI', 'CARD'])),
+        cash_count=Count('id', filter=models.Q(method='CASH')),
+    )
+    today_upi = today_pay['upi'] or 0
+    today_cash = today_pay['cash'] or 0
+    today_upi_count = today_pay['upi_count'] or 0
+    today_cash_count = today_pay['cash_count'] or 0
+
     from .models import InventoryPurchase, DishSale
     today_expenses = InventoryPurchase.objects.filter(timestamp__date=today).aggregate(t=Sum('purchase_price'))['t'] or 0
-    
+
     today_stats = {
         'total': float(today_revenue),
         'upi': float(today_upi),
@@ -963,62 +1003,86 @@ def dashboard_stats(request):
         'trend_percentage': round(trend, 1),
         'is_positive': trend >= 0
     }
-    
+
     # 2. Period Stats
     start_str = request.GET.get('start_date')
     end_str = request.GET.get('end_date')
-    
+
     if start_str and end_str:
-        start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
-        end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+        try:
+            start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+        except ValueError:
+            end_date = today
+            start_date = today - timedelta(days=6)
     else:
         end_date = today
         start_date = today - timedelta(days=6)
-        
-    # Generate daily chart data
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    # cap range to avoid excessive work
+    if (end_date - start_date).days > 60:
+        start_date = end_date - timedelta(days=60)
+
+    sales_by_day = {
+        row['day']: float(row['t'] or 0)
+        for row in (
+            completed_qs
+            .filter(completed_at__date__range=[start_date, end_date])
+            .annotate(day=TruncDate('completed_at'))
+            .values('day')
+            .annotate(t=Sum('final_total'))
+        )
+    }
+    exp_by_day = {
+        row['day']: float(row['t'] or 0)
+        for row in (
+            InventoryPurchase.objects
+            .filter(timestamp__date__range=[start_date, end_date])
+            .annotate(day=TruncDate('timestamp'))
+            .values('day')
+            .annotate(t=Sum('purchase_price'))
+        )
+    }
+
     chart_data = []
     current = start_date
-    period_sales = 0
-    period_profit = 0
-    period_expenses = 0
-    
+    period_sales = 0.0
+    period_profit = 0.0
+    period_expenses = 0.0
     while current <= end_date:
-        d_orders = Order.objects.filter(status='COMPLETED', completed_at__date=current)
-        d_sales = d_orders.aggregate(t=Sum('final_total'))['t'] or 0
-        d_exp = InventoryPurchase.objects.filter(timestamp__date=current).aggregate(t=Sum('purchase_price'))['t'] or 0
-        
-        # Simple profit calculation for mock: assuming base margin of 40% minus expenses
-        # In a real app, you would sum (selling price - cost price). Here we'll do sales - expenses
-        d_profit = float(d_sales) - float(d_exp)
-        
-        period_sales += float(d_sales)
-        period_expenses += float(d_exp)
-        period_profit += float(d_profit)
-        
+        d_sales = sales_by_day.get(current, 0.0)
+        d_exp = exp_by_day.get(current, 0.0)
+        d_profit = d_sales - d_exp
+        period_sales += d_sales
+        period_expenses += d_exp
+        period_profit += d_profit
         chart_data.append({
             'date': current.strftime('%b') + ' ' + str(current.day),
             'fullDate': current.strftime('%Y-%m-%d'),
-            'sales': float(d_sales),
-            'profit': float(d_profit),
-            'expenses': float(d_exp)
+            'sales': d_sales,
+            'profit': d_profit,
+            'expenses': d_exp
         })
         current += timedelta(days=1)
-        
+
     # Top Items for Period
     top_items = DishSale.objects.filter(timestamp__date__range=[start_date, end_date]).values('dish_name').annotate(
         qty=Sum('quantity'),
         revenue=Sum(models.F('quantity') * models.F('price_sold'), output_field=models.DecimalField())
     ).order_by('-qty')[:20]
-    
-    items_data = []
-    for item in top_items:
-        items_data.append({
+
+    items_data = [
+        {
             'name': item['dish_name'],
             'qty': item['qty'],
-            'revenue': float(item['revenue']),
+            'revenue': float(item['revenue'] or 0),
             'trend': 'up',
             'trendValue': 0
-        })
+        }
+        for item in top_items
+    ]
 
     return Response({
         'today': today_stats,
@@ -1026,9 +1090,9 @@ def dashboard_stats(request):
             'chart_data': chart_data,
             'items_data': items_data,
             'summary': {
-                'total_sales': float(period_sales),
-                'total_profit': float(period_profit),
-                'total_expenses': float(period_expenses)
+                'total_sales': period_sales,
+                'total_profit': period_profit,
+                'total_expenses': period_expenses
             }
         },
         # Keep old keys to not break existing frontend during transition
