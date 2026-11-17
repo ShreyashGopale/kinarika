@@ -79,17 +79,37 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 # Use Supabase PostgreSQL on Vercel or when POSTGRES_DB is set; SQLite locally
-if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL'):
+if os.environ.get('POSTGRES_DB') or os.environ.get('VERCEL') or os.environ.get('POSTGRES_HOST'):
+    db_host = os.environ.get('POSTGRES_HOST') or 'aws-0-ap-south-1.pooler.supabase.com'
+    db_port = os.environ.get('POSTGRES_PORT') or '6543'
+    db_user = os.environ.get('POSTGRES_USER') or 'postgres.lrujygyuchccliabhfxg'
+    db_password = os.environ.get('POSTGRES_PASSWORD') or 'OmkarWalunj@12345'
+    db_name = os.environ.get('POSTGRES_DB') or 'postgres'
+
+    # Sanitize IPv6 direct host (db.*.supabase.co has no IPv4 route on Vercel)
+    if 'db.' in db_host and 'supabase.co' in db_host:
+        db_host = 'aws-0-ap-south-1.pooler.supabase.com'
+
+    # Ensure tenant id in pooler user
+    if db_user == 'postgres' or '.' not in db_user:
+        db_user = 'postgres.lrujygyuchccliabhfxg'
+
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('POSTGRES_DB', 'postgres'),
-            'USER': os.environ.get('POSTGRES_USER', 'postgres'),
-            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-            'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
-            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'NAME': db_name,
+            'USER': db_user,
+            'PASSWORD': db_password,
+            'HOST': db_host,
+            'PORT': db_port,
+            'CONN_MAX_AGE': 600,
+            'OPTIONS': {
+                'sslmode': 'require',
+                'connect_timeout': 5,
+            },
         }
     }
+    DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 else:
     DATABASES = {

@@ -118,8 +118,13 @@ def tables_list(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     table = Table.objects.create(name=name)
-    return Response({'id': table.id, 'name': table.name},
-                    status=status.HTTP_201_CREATED)
+    return Response({
+        'id': table.id,
+        'name': table.name,
+        'has_active_order': False,
+        'active_order_id': None,
+        'active_order_status': None,
+    }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['DELETE'])
@@ -323,7 +328,7 @@ def delete_menu_item(request, pk):
 
 @api_view(['POST'])
 def create_order(request):
-    """Create a new dine-in or token order."""
+    """Create a new dine-in or token order, optionally with items in a single atomic transaction."""
     with transaction.atomic():
         order_type = request.data.get('order_type', 'dine-in')
         table_name = request.data.get('table_name', None)
@@ -350,15 +355,51 @@ def create_order(request):
         if phone:
             customer, _ = Customer.objects.get_or_create(phone_number=phone)
             order.customer = customer
-            order.save()
+            order.save(update_fields=['customer'])
 
+        # Atomic bulk item creation if items are provided
+        items_data = request.data.get('items', [])
+        if items_data:
+            item_ids = [entry['menu_item_id'] for entry in items_data if 'menu_item_id' in entry]
+            menu_items_map = MenuItem.objects.in_bulk(item_ids)
+            order_items_to_create = []
+            subtotal = Decimal('0.00')
+
+            for entry in items_data:
+                mid = entry.get('menu_item_id')
+                m_item = menu_items_map.get(mid)
+                if m_item:
+                    qty = int(entry.get('quantity', 1))
+                    price = m_item.price
+                    subtotal += price * qty
+                    order_items_to_create.append(OrderItem(
+                        order=order,
+                        menu_item=m_item,
+                        name_snapshot=m_item.name,
+                        price_snapshot=price,
+                        quantity=qty,
+                    ))
+
+            if order_items_to_create:
+                OrderItem.objects.bulk_create(order_items_to_create)
+
+            order.original_subtotal = subtotal
+            order.save(update_fields=['original_subtotal'])
+
+    # Return serialized order with prefetch
+    order = (
+        Order.objects
+        .select_related('customer', 'payment')
+        .prefetch_related('items__menu_item')
+        .get(pk=order.id)
+    )
     return Response(OrderSerializer(order).data,
                     status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
 def add_items_to_order(request, pk):
-    """Append menu items to an existing order."""
+    """Append menu items to an existing order in bulk."""
     try:
         order = Order.objects.get(pk=pk)
     except Order.DoesNotExist:
@@ -369,32 +410,62 @@ def add_items_to_order(request, pk):
                         status=status.HTTP_400_BAD_REQUEST)
 
     items_data = request.data.get('items', [])
+    if not items_data:
+        order = (
+            Order.objects
+            .select_related('customer', 'payment')
+            .prefetch_related('items__menu_item')
+            .get(pk=order.id)
+        )
+        return Response(OrderSerializer(order).data)
+
+    item_ids = [entry['menu_item_id'] for entry in items_data if 'menu_item_id' in entry]
+    menu_items_map = MenuItem.objects.in_bulk(item_ids)
+
     with transaction.atomic():
+        existing_items = {
+            oi.menu_item_id: oi
+            for oi in OrderItem.objects.filter(order=order, menu_item_id__in=item_ids)
+        }
+        to_create = []
+        to_update = []
+
         for entry in items_data:
-            menu_item = MenuItem.objects.get(id=entry['menu_item_id'])
-            # Check if item already in order – if so, increase qty
-            existing = OrderItem.objects.filter(
-                order=order, menu_item=menu_item
-            ).first()
-            if existing:
-                existing.quantity += entry.get('quantity', 1)
-                existing.save()
+            mid = entry.get('menu_item_id')
+            qty = int(entry.get('quantity', 1))
+            m_item = menu_items_map.get(mid)
+            if not m_item:
+                continue
+
+            if mid in existing_items:
+                oi = existing_items[mid]
+                oi.quantity += qty
+                to_update.append(oi)
             else:
-                OrderItem.objects.create(
+                to_create.append(OrderItem(
                     order=order,
-                    menu_item=menu_item,
-                    name_snapshot=menu_item.name,
-                    price_snapshot=menu_item.price,
-                    quantity=entry.get('quantity', 1),
-                )
+                    menu_item=m_item,
+                    name_snapshot=m_item.name,
+                    price_snapshot=m_item.price,
+                    quantity=qty,
+                ))
 
-    # Recalculate subtotal
-    subtotal = Decimal('0.00')
-    for oi in order.items.all():
-        subtotal += oi.price_snapshot * oi.quantity
-    order.original_subtotal = subtotal
-    order.save()
+        if to_create:
+            OrderItem.objects.bulk_create(to_create)
+        if to_update:
+            OrderItem.objects.bulk_update(to_update, ['quantity'])
 
+        # Recalculate subtotal
+        subtotal = sum(oi.price_snapshot * oi.quantity for oi in order.items.all())
+        order.original_subtotal = subtotal
+        order.save(update_fields=['original_subtotal'])
+
+    order = (
+        Order.objects
+        .select_related('customer', 'payment')
+        .prefetch_related('items__menu_item')
+        .get(pk=order.id)
+    )
     return Response(OrderSerializer(order).data)
 
 
@@ -786,15 +857,19 @@ def complete_bill(request, pk):
             order=order, amount=final_total, method=payment_method
         )
 
-        # Track dish sales for reporting
-        for item in items:
-            DishSale.objects.create(
+        # Track dish sales for reporting in bulk
+        dish_sales_to_create = [
+            DishSale(
                 order_reference=order.order_number,
                 dish_name=item.name_snapshot,
                 price_sold=item.price_snapshot,
                 quantity=item.quantity,
                 item_type=item.menu_item.item_type if item.menu_item else 'unknown'
             )
+            for item in items
+        ]
+        if dish_sales_to_create:
+            DishSale.objects.bulk_create(dish_sales_to_create)
 
         # Loyalty bookkeeping
         if loyalty:

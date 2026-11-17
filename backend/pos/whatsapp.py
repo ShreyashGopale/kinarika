@@ -87,7 +87,7 @@ def send_whatsapp(to_raw, text):
     req.add_header('Content-Type', 'application/json')
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=3) as resp:
             body = resp.read().decode('utf-8') or '{}'
             try:
                 return True, json.loads(body)
